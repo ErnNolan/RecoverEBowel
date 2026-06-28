@@ -1,0 +1,786 @@
+---
+title: "Bowel cancer analysis"
+output: html_document
+date: "2025-10-24"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#to make the renv intially
+#renv::init()
+
+#renv friendly loading of packages.
+#dont use pacman for this as it may overwrite the version of the package used in renv
+required_packages <- c("tidyverse", "here", "renv","Hmisc","gtsummary","brms","mice","posterior","marginaleffects","bayestestR")
+
+missing <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
+if (length(missing) > 0) {
+  stop("Missing packages: ", paste(missing, collapse = ", "), 
+       ". Please run renv::restore() to install them.")
+}
+#if a package isnt installed in renv::restore(), do this: 
+#renv::install("tidyverse")
+
+library(renv)
+library(tidyverse)
+library(here)
+library(Hmisc)
+library(gtsummary)
+library(brms)
+library(mice)
+library(posterior)
+library(marginaleffects)
+library(bayestestR)
+
+#function to test the convergence of each model in brm_multiple
+convergence <- function(chains=4,imps=20,mod=mod){
+  draws <- as_draws_array(mod)
+  # Subset chains for each dataset
+  draws_per_dat <- lapply(1:imps, \(i) {
+    start_chain <- (i - 1) * chains + 1
+    end_chain <- i * chains
+    subset_draws(draws, chain = start_chain:end_chain)
+  })
+  summaries <- lapply(draws_per_dat, summarise_draws, default_convergence_measures())
+  return(summaries)
+}
+
+```
+
+# Analysis phase 1
+## Read in the data
+```{r}
+bowel <- readRDS(here("Data","bowel.RDS"))
+
+# bowel2 <- bowel %>% select(record_id,los)
+# test <- full_join(bowel2,bo_p2_imp,by="record_id") %>%
+#   group_by(record_id,.imp) %>%
+#   mutate(summary_base = max(ifelse(time=="0",summary_score,NA),na.rm=T)) %>%
+#   filter(time %in% c(1),.imp==1)
+
+```
+
+## Primary outcome - LOS
+no one missing the primary outcome or covars
+group, stoma, type of surgery, hospital
+```{r}
+#select vars for model and make the groups unblinded
+bowel_mod <- bowel %>%
+  dplyr::select(grp,redcap_data_access_group,stoma.factor,
+                surgery_type.factor,los)%>%
+  mutate(grp = ifelse(grp == "A","Treatment","Control"))
+
+#run the brms model
+los_mod <- brm(los ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_mod,family=poisson,iter=10000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+
+#test <- loo(los_mod)
+#tests <- loo(los_mods) #worse with summary_base, p_loo 32.9 without, 37.3 with
+
+#checking fit with this and rhat + ess. Want rhat < 1.05 and ess > 10000 for 95% CrI
+#plot(los_mod)
+#pp_check(los_mod, ndraws=100)
+
+#rate ratio
+losrr <- avg_comparisons(los_mod,variables=list(grp="pairwise"),
+                         comparison = "ratio",ndraws=5000) %>%
+  mutate(RR = paste0(sprintf("%.2f",round(estimate,2))," (", round(conf.low,2),", ",round(conf.high,2),")")) %>%
+  dplyr::select(RR)
+#p(sup)
+losh <- hypothesis(los_mod,"grpTreatment < 0")[["hypothesis"]] %>%
+  dplyr::select(Post.Prob)
+#crude and combine
+crude_los <- tbl_summary(data=bowel,by="grp",include="los",
+                         statistic=list(all_continuous() ~ "{median} ({N_nonmiss}, {p25}, {p75})"),
+                         digits = all_continuous() ~ 0) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+los_res <- merge(crude_los,losrr) %>% merge(losh)
+saveRDS(los_res,here("Output","Bo_los_res.RDS"))
+
+#PRIOR SENSITIVITY
+# los_mod_sens <- brm(los ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_mod,family=poisson,iter=10000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+#pr(sup)=0.22, same as other prior
+#1.07, 0.89, 1.28 - pretty much same as other prior
+```
+
+## Device
+```{r}
+#read in the data
+bowel_imp <- readRDS(here("Data","bowel_imp.RDS"))
+#run the brms model
+dev_mod <- brm_multiple(device ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_imp,family=bernoulli,iter=15000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+#check convergence of each imputation
+dev_convergence <- convergence(chains=4,imps=20,mod=dev_mod)
+
+#model results
+dev_ci <- bayestestR::hdi(dev_mod)[2,3:4]
+devh <- hypothesis(dev_mod,"grpTreatment > 0")[["hypothesis"]] %>%
+  dplyr::select(Estimate,Post.Prob)
+devor <- merge(dev_ci,devh) %>%
+  mutate(OR = paste0(sprintf("%.2f",round(exp(Estimate),2))," (", round(exp(CI_low),2),", ",round(exp(CI_high),2),")"))
+#crude and combine
+crude_dev <- tbl_summary(data=bowel,by="grp",include="pt_device_hosp.factor",
+                         statistic=list(all_dichotomous() ~ "{n}/{N} ({p}%)")) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+dev_res <- merge(crude_dev,devor)
+
+saveRDS(dev_res,here("Output","Bo_dev_res.RDS"))
+
+#PRIOR SENSITIVITY - how different is it with prior of 10? (exp(10) is over 1000)
+# dev_mod_sens <- brm_multiple(device ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_imp,family=bernoulli,iter=10000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+# dev_convergence_sens <- convergence(chains=4,imps=20,mod=dev_mod_sens)
+#almost same results, very similar - 1.68 (95%CrI 0.066, 39.65) pr(sup)=0.62
+```
+
+## Meals
+```{r}
+#may want to dichotomise - the levels are tiny
+bowel_imp <- readRDS(here("Data","bowel_imp.RDS"))
+
+meal_mod <- brm_multiple(meals_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_imp,family=bernoulli,iter=10000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+meal_convergence <- convergence(chains=4,imps=20,mod=meal_mod)
+
+#model results
+meal_ci <- bayestestR::hdi(meal_mod)[2,3:4]
+mealh <- hypothesis(meal_mod,"grpTreatment > 0")[["hypothesis"]] %>%
+  dplyr::select(Estimate,Post.Prob)
+mealor <- merge(meal_ci,mealh) %>%
+  mutate(OR = paste0(sprintf("%.2f",round(exp(Estimate),2))," (", round(exp(CI_low),2),", ",round(exp(CI_high),2),")"))
+#crude and combine
+crude_meals <- tbl_summary(data=bowel,by="grp",include="meals_bin",
+                           statistic = list(all_dichotomous() ~ "{n}/{N} ({p}%)")) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+meals_res <- merge(crude_meals,mealor)
+saveRDS(meals_res,here("Output","Bo_meals_res.RDS"))
+
+#PRIOR SENSITIVITY
+# meal_mod_sens <- brm_multiple(meals_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_imp,family=bernoulli,iter=10000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+#results pretty much the same
+# 
+
+
+```
+
+
+## Snacks
+```{r}
+#suggest dichotomise into "any" = 1,2,3 vs "none" = 0
+bowel_imp <- readRDS(here("Data","bowel_imp.RDS"))
+
+snack_mod <- brm_multiple(snacks_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_imp,family=bernoulli,iter=10000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+snack_convergence <- convergence(chains=4,imps=20,mod=snack_mod)
+
+#model results
+snack_ci <- bayestestR::hdi(snack_mod)[2,3:4]
+snackh <- hypothesis(snack_mod,"grpTreatment > 0")[["hypothesis"]] %>%
+  dplyr::select(Estimate,Post.Prob)
+snackor <- merge(snack_ci,snackh) %>%
+  mutate(OR = paste0(sprintf("%.2f",round(exp(Estimate),2))," (", round(exp(CI_low),2),", ",round(exp(CI_high),2),")"))
+#crude and combine
+crude_snack <- tbl_summary(data=bowel,by="grp",include="snacks_bin",
+                           statistic = list(all_dichotomous() ~ "{n}/{N} ({p}%)")) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+snack_res <- merge(crude_snack,snackor)
+saveRDS(snack_res,here("Output","Bo_snack_res.RDS"))
+
+#PRIOR SENSITIVITY
+# snack_mod_sens <- brm_multiple(snacks_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_imp,family=bernoulli,iter=10000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+
+```
+
+
+## Fluids
+```{r}
+#suggest dichotomise into 4+ cups vs <=3 cups
+bowel_imp <- readRDS(here("Data","bowel_imp.RDS"))
+
+fluid_mod <- brm_multiple(fluid_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_imp,family=bernoulli,iter=10000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+fluid_convergence <- convergence(chains=4,imps=20,mod=fluid_mod)
+
+#model results
+fluid_ci <- bayestestR::hdi(fluid_mod)[2,3:4]
+fluidh <- hypothesis(fluid_mod,"grpTreatment > 0")[["hypothesis"]] %>%
+  dplyr::select(Estimate,Post.Prob)
+fluidor <- merge(fluid_ci,fluidh) %>%
+  mutate(OR = paste0(sprintf("%.2f",round(exp(Estimate),2))," (", round(exp(CI_low),2),", ",round(exp(CI_high),2),")"))
+#crude and combine
+crude_fluid <- tbl_summary(data=bowel,by="grp",include="fluid_bin",
+                           statistic = list(all_dichotomous() ~ "{n}/{N} ({p}%)")) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+fluid_res <- merge(crude_fluid,fluidor)
+saveRDS(fluid_res,here("Output","Bo_fluid_res.RDS"))
+
+#PRIOR SENSITIVITY
+# fluid_mod_sens <- brm_multiple(fluid_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_imp,family=bernoulli,iter=10000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+#almost the same
+```
+
+## Time out of bed
+```{r}
+bowel_imp <- readRDS(here("Data","bowel_imp.RDS"))
+
+oob_mod <- brm_multiple(bed_hosp_mins_total ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_imp,family=poisson,iter=10000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+oob_convergence <- convergence(chains=4,imps=20,mod=oob_mod)
+
+
+#model results
+oob_ci <- bayestestR::hdi(oob_mod)[2,3:4]
+oobh <- hypothesis(oob_mod,"grpTreatment > 0")[["hypothesis"]] %>%
+  dplyr::select(Estimate,Post.Prob)
+oobrr <- merge(oob_ci,oobh) %>%
+  mutate(RR = paste0(sprintf("%.2f",round(exp(Estimate),2))," (", round(exp(CI_low),2),", ",round(exp(CI_high),2),")"))
+#crude and combine
+crude_oob <- tbl_summary(data=bowel,by="grp",include="bed_hosp_mins_total",
+                         statistic = list(all_continuous() ~ "{median} ({N_nonmiss}, {p25}, {p75})")) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+oob_res <- merge(crude_oob,oobrr)
+saveRDS(oob_res,here("Output","Bo_oob_res.RDS"))
+
+#PRIOR SENSITIVITY
+# oob_mod_sens <- brm_multiple(bed_hosp_mins_total ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_imp,family=poisson,iter=10000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+#quite similar results
+```
+
+## Time spent moving
+```{r}
+bowel_imp <- readRDS(here("Data","bowel_imp.RDS"))
+
+move_mod <- brm_multiple(walk_hosp_mins_total ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_imp,family=poisson,iter=10000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+move_convergence <- convergence(chains=4,imps=20,mod=move_mod)
+
+#model results
+move_ci <- bayestestR::hdi(move_mod)[2,3:4]
+moveh <- hypothesis(move_mod,"grpTreatment > 0")[["hypothesis"]] %>%
+  dplyr::select(Estimate,Post.Prob)
+moverr <- merge(move_ci,moveh) %>%
+  mutate(RR = paste0(sprintf("%.2f",round(exp(Estimate),2))," (", round(exp(CI_low),2),", ",round(exp(CI_high),2),")"))
+#crude and combine
+crude_move <- tbl_summary(data=bowel,by="grp",include="walk_hosp_mins_total",
+                         statistic = list(all_continuous() ~ "{median} ({N_nonmiss}, {p25}, {p75})")) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+move_res <- merge(crude_move,moverr)
+saveRDS(move_res,here("Output","Bo_move_res.RDS"))
+
+#PRIOR SENSITIVITY
+# move_mod_sens <- brm_multiple(walk_hosp_mins_total ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_imp,family=poisson,iter=10000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+#very similar results
+```
+
+
+## Breathing exercises
+```{r}
+bowel_imp <- readRDS(here("Data","bowel_imp.RDS"))
+
+breath_mod <- brm_multiple(breath_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_imp,family=bernoulli,iter=10000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+breath_convergence <- convergence(chains=4,imps=20,mod=breath_mod)
+
+#model results
+breath_ci <- bayestestR::hdi(breath_mod)[2,3:4]
+breathh <- hypothesis(breath_mod,"grpTreatment > 0")[["hypothesis"]] %>%
+  dplyr::select(Estimate,Post.Prob)
+breathor <- merge(breath_ci,breathh) %>%
+  mutate(OR = paste0(sprintf("%.2f",round(exp(Estimate),2))," (", round(exp(CI_low),2),", ",round(exp(CI_high),2),")"))
+#crude and combine
+crude_breath <- tbl_summary(data=bowel,by="grp",include="breath_bin",
+                         statistic = list(all_dichotomous() ~ "{n}/{N} ({p}%)")) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+breath_res <- merge(crude_breath,breathor)
+saveRDS(breath_res,here("Output","Bo_breath_res.RDS"))
+
+#PRIOR SENSITIVITY
+# breath_mod_sens <- brm_multiple(breath_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_imp,family=bernoulli,iter=10000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+#very similar results
+```
+
+
+## Knowledge
+### Able to enhance own recovery
+```{r}
+bowel_imp <- readRDS(here("Data","bowel_imp.RDS"))
+
+able_mod <- brm_multiple(able_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_imp,family=bernoulli,iter=15000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+able_convergence <- convergence(chains=4,imps=20,mod=able_mod)
+
+#model results
+able_ci <- bayestestR::hdi(able_mod)[2,3:4]
+ableh <- hypothesis(able_mod,"grpTreatment > 0")[["hypothesis"]] %>%
+  dplyr::select(Estimate,Post.Prob)
+ableor <- merge(able_ci,ableh) %>%
+  mutate(OR = paste0(sprintf("%.2f",round(exp(Estimate),2))," (", round(exp(CI_low),2),", ",round(exp(CI_high),2),")"))
+#crude and combine
+crude_able <- tbl_summary(data=bowel,by="grp",include="able_bin",
+                         statistic = list(all_dichotomous() ~ "{n}/{N} ({p}%)")) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+able_res <- merge(crude_able,ableor)
+saveRDS(able_res,here("Output","Bo_able_res.RDS"))
+
+#PRIOR SENSITIVITY
+# able_mod_sens <- brm_multiple(able_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_imp,family=bernoulli,iter=15000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+#very similar results
+```
+
+### How to enhance own recovery
+```{r}
+bowel_imp <- readRDS(here("Data","bowel_imp.RDS"))
+
+under_mod <- brm_multiple(understand_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_imp,family=bernoulli,iter=15000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,10),class=Intercept)))
+under_convergence <- convergence(chains=4,imps=20,mod=under_mod)
+
+#model results
+under_ci <- bayestestR::hdi(under_mod)[2,3:4]
+underh <- hypothesis(under_mod,"grpTreatment > 0")[["hypothesis"]] %>%
+  dplyr::select(Estimate,Post.Prob)
+underor <- merge(under_ci,underh) %>%
+  mutate(OR = paste0(sprintf("%.2f",round(exp(Estimate),2))," (", round(exp(CI_low),2),", ",round(exp(CI_high),2),")"))
+#crude and combine
+crude_under <- tbl_summary(data=bowel,by="grp",include="understand_bin",
+                         statistic = list(all_dichotomous() ~ "{n}/{N} ({p}%)")) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+under_res <- merge(crude_under,underor)
+saveRDS(under_res,here("Output","Bo_under_res.RDS"))
+
+#PRIOR SENSITIVITY
+# under_mod_sens <- brm_multiple(understand_bin ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_imp,family=bernoulli,iter=15000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,10),class=Intercept)))
+#very similar results
+
+```
+
+## Quality of recovery
+```{r}
+bowel_imp <- readRDS(here("Data","bowel_imp.RDS"))
+
+qor_mod <- brm_multiple(qor_tot ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_imp,family=gaussian,iter=10000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+qor_convergence <- convergence(chains=4,imps=20,mod=qor_mod)
+
+#model results
+qor_ci <- bayestestR::hdi(qor_mod)[2,3:4]
+qorh <- hypothesis(qor_mod,"grpTreatment > 0")[["hypothesis"]] %>%
+  dplyr::select(Estimate,Post.Prob)
+qormd <- merge(qor_ci,qorh) %>%
+  mutate(MD = paste0(sprintf("%.2f",round(Estimate,2))," (", round(CI_low,2),", ",round(CI_high,2),")"))
+#crude and combine
+crude_qor <- tbl_summary(data=bowel,by="grp",include="qor_tot",
+                         statistic = list(all_continuous() ~ "{mean} ({N_nonmiss}, {sd})"),
+                         digits = all_continuous() ~ list(mean = 2, sd = 2, N_nonmiss = 0)) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+qor_res <- merge(crude_qor,qormd)
+saveRDS(qor_res,here("Output","Bo_qor_res.RDS"))
+
+#PRIOR SENSITIVITY
+# qor_mod_sens <- brm_multiple(qor_tot ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_imp,family=gaussian,iter=10000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+#Pr(sup) doesnt change, est changes but the main one is less informative so preferred I think
+#This is a very conservative prior
+
+```
+
+## Combine all the models
+
+```{r}
+
+res_models <- bind_rows(los_res,dev_res,meals_res,snack_res,fluid_res,
+                        oob_res,move_res,breath_res,able_res,under_res,qor_res) %>%
+  filter(`**Characteristic**` != "Unknown") %>%
+  rename(char = `**Characteristic**`) %>%
+  mutate(est = case_when(!is.na(RR) ~ paste0("RR = ",RR),
+                         !is.na(OR) ~ paste0("OR = ",OR),
+                         !is.na(MD) ~ paste0("MD = ",MD)),
+         outcome = case_when(char == "los" ~ "Length of stay (median (N, IQR))",
+                             char == "pt_device_hosp.factor" ~ "Device (n/N %)",
+                             char == "meals_bin" ~ "Meals (n/N %)",
+                             char == "snacks_bin" ~ "Snacks (n/N %)",
+                             char == "fluid_bin" ~ "Fluids (n/N %)",
+                             char == "bed_hosp_mins_total" ~ "Time out of bed (median (N, IQR))",
+                             char == "walk_hosp_mins_total" ~ "Time spent moving (median (N, IQR))",
+                             char == "breath_bin" ~ "Breathing exercises (n/N %)",
+                             char == "able_bin" ~ "Able to enhance own recovery (n/N %)",
+                             char == "understand_bin" ~ "How to enhance own recovery (n/N %)",
+                             char == "qor_tot" ~ "QOR at 2 days (mean (N, SD))")) %>%
+  dplyr::select(outcome,A,B,est,Post.Prob)
+saveRDS(res_models,here("Output","Bo_res_models.RDS"))
+```
+
+## Per protocol
+
+### LOS
+
+```{r}
+bowel_mod_pp <- bowel %>%
+  dplyr::select(grp,redcap_data_access_group,stoma.factor,
+                surgery_type.factor,los,per_protocol)%>%
+  mutate(grp = ifelse(grp == "A","Treatment","Control")) %>%
+  filter(per_protocol == 1)
+
+los_mod_pp <- brm(los ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+               data=bowel_mod_pp,family=poisson,iter=10000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+#plot(los_mod_pp)
+#pp_check(los_mod_pp)
+
+#rate ratio
+los_pprr <- avg_comparisons(los_mod_pp,variables=list(grp="pairwise"),
+                         comparison = "ratio",ndraws=5000) %>%
+  mutate(RR = paste0(sprintf("%.2f",round(estimate,2))," (", round(conf.low,2),", ",round(conf.high,2),")")) %>%
+  dplyr::select(RR)
+#p(sup)
+los_pph <- hypothesis(los_mod_pp,"grpTreatment < 0")[["hypothesis"]] %>%
+  dplyr::select(Post.Prob)
+#crude and combine
+crude_los_pp <- tbl_summary(data=bowel_mod_pp,by="grp",include="los",
+                         statistic=list(all_continuous() ~ "{median} ({N_nonmiss}, {p25}, {p75})"),
+                         digits = all_continuous() ~ 0) %>%
+  modify_header(stat_1 = "{level}",stat_2 = "{level}") %>%
+  as.data.frame()
+los_res_pp <- merge(crude_los_pp,los_pprr) %>% merge(los_pph)
+saveRDS(los_res_pp,here("Output","los_res_pp.RDS"))
+
+#PRIOR SENSITIVITY
+# los_mod_pp_sens <- brm(los ~ grp + redcap_data_access_group + stoma.factor + surgery_type.factor,
+#                data=bowel_mod_pp,family=poisson,iter=10000,seed=46137112,
+#                prior = c(prior(normal(0,10),class=b),
+#                          prior(student_t(3,0,100),class=Intercept)))
+#very similar results
+```
+
+#Second analysis phase
+
+## Read in data
+```{r}
+bo_p2_imp <- readRDS(here("Data","p2bo_imp_long.RDS")) %>%
+  mutate(treatment = ifelse(group_allocation == "1","Treatment","Control"),
+         grp = ifelse(group_allocation == "1",1,0))
+
+p2_bo_split <- split(x=bo_p2_imp,f=bo_p2_imp$.imp)
+
+bo_p2 <- readRDS(here("Data","bo_p2.RDS")) %>%
+  mutate(treatment = ifelse(group_allocation == "1","Treatment","Control"),
+         grp = ifelse(group_allocation == "1",1,0))
+  
+```
+
+
+## EORTC QLQ-C30  
+
+At 30 and 90 days
+Also has baseline value
+```{r}
+bo_p2_qlq <- bo_p2_imp %>%
+  group_by(record_id,.imp) %>%
+  mutate(summary_base = max(ifelse(time=="0",summary_score,NA),na.rm=T)) %>%
+  filter(time %in% c(1,3))
+
+qlq_split <- split(x=bo_p2_qlq,f=bo_p2_qlq$.imp)
+
+c30_mod <- brm_multiple(summary_score ~ summary_base + grp*time + redcap_data_access_group.factor + stoma.factor + 
+                        surgery_type.factor + (1|record_id),
+                        data=qlq_split,family=gaussian,iter=12000,seed=46137112,
+                        control = list(adapt_delta = 0.96),
+                        prior = c(prior(normal(0,1000),class=b),
+                        prior(student_t(3,0,100),class=Intercept),
+                        prior(student_t(3,0,100),class=sigma)))
+c30_convergence <- convergence(chains=4,imps=20,mod=c30_mod) %>% bind_rows()
+#test it on just 1 imputation
+#test <- loo(c30_mod)
+#get the CrI and Pr(Sup) from the models
+c30h <- hypothesis(c30_mod,c("grp > 0",
+                             "grp + grp:time3 > 0"),
+                     alpha=0.025)[["hypothesis"]] %>%
+  dplyr::select(Hypothesis,Estimate,Post.Prob,CI.Lower,CI.Upper) %>%
+  mutate(time = case_when(grepl("3",Hypothesis) ~ "3",
+                          .default="1"),
+         MD = paste0(sprintf("%.2f",round(Estimate,2))," (", round(CI.Lower,2),", ",round(CI.Upper,2),")"))
+
+c30_res <- bo_p2 %>% 
+  group_by(time,treatment) %>% 
+  summarise(summary_score = paste0(round(mean(summary_score,na.rm=T),2)," (",sum(!is.na(summary_score)),
+                                   ", ",round(sd(summary_score,na.rm=T),2),")")) %>% 
+  pivot_wider(id_cols=time,names_from=treatment,values_from=summary_score) %>%
+  filter(time != "hosp") %>%
+  full_join(c30h,by="time")
+
+saveRDS(c30_res,here("Output","bo_p2_c30.RDS"))
+```
+
+## Quality of Recovery
+
+```{r}
+bo_p2_qor <- bo_p2_imp %>%
+  group_by(record_id,.imp) %>%
+  mutate(qor_base = max(ifelse(time=="0",qor,NA),na.rm=T)) %>%
+  filter(time %in% c("1","3","hosp"))
+p2_bo_qor_split <- split(x=bo_p2_qor,f=bo_p2_qor$.imp)
+
+qor_long_mod <- brm_multiple(qor ~ grp*time + qor_base + redcap_data_access_group.factor + 
+                               stoma.factor + surgery_type.factor + (1|record_id),
+               data=p2_bo_qor_split,family=gaussian,iter=26000,seed=46137112,
+               prior = c(prior(normal(0,1000),class=b),
+                         prior(student_t(3,0,100),class=Intercept),
+                         prior(student_t(3,0,100),class=sigma)))
+qor_long_convergence <- convergence(chains=4,imps=20,mod=qor_long_mod) %>% bind_rows()
+
+#get the CrI and Pr(Sup) from the models
+qorh <- hypothesis(qor_long_mod,c("grp > 0",
+                                  "grp + grp:timehosp > 0",
+                                  "grp + grp:time3 > 0"),
+                     alpha=0.025)[["hypothesis"]] %>%
+  dplyr::select(Hypothesis,Estimate,Post.Prob,CI.Lower,CI.Upper) %>%
+  mutate(time = case_when(grepl("3",Hypothesis) ~ "3",
+                          grepl("hosp",Hypothesis) ~ "hosp",
+                          .default="1"),
+         MD = paste0(sprintf("%.2f",round(Estimate,2))," (", round(CI.Lower,2),", ",round(CI.Upper,2),")"))
+
+qor_res <- bo_p2 %>% 
+  group_by(time,treatment) %>% 
+  summarise(qor = paste0(round(mean(qor,na.rm=T),2)," (",sum(!is.na(qor)),
+                                   ", ",round(sd(qor,na.rm=T),2),")")) %>% 
+  pivot_wider(id_cols=time,names_from=treatment,values_from=qor) %>%
+  #filter(time != "0") %>%
+  full_join(qorh,by="time")
+
+saveRDS(qor_res,here("Output","Bo_qor_res.RDS"))
+
+```
+
+## Days alive and out of hospital
+
+Do these as separate models, otherwise the very high correlation between the outcomes might cause model issues.
+
+### 30 days
+
+```{r}
+daoh_30 <- bo_p2 %>% 
+  mutate(rev_daoh = 30 - daoh)
+
+# daoh_imp <- readRDS(here("Data","p2bo_imp_long.RDS")) %>%
+#   mutate(treatment = ifelse(group_allocation == "1","Treatment","Control"),
+#          grp = ifelse(group_allocation == "1",1,0)) %>%
+#   filter(.imp == 1) %>%
+#   mutate(rev_daoh = 30 - daoh) %>%
+#   group_by(record_id) %>%
+#   mutate(summary_base = max(ifelse(time=="0",summary_score,NA),na.rm=T)) %>%
+#   filter(time == "1")
+  
+daoh30_mod <- brm(rev_daoh ~ grp + redcap_data_access_group.factor + stoma.factor + surgery_type.factor,
+                       data=daoh_30,family=poisson(),iter=10000,seed=46137112,
+                       prior = c(prior(normal(0,10),class=b),
+                                 #a prior for random intercept,
+                                 prior(student_t(3,0,100),class=Intercept)))
+#test <- loo(daoh30_mod)
+#test_sum <- loo(daoh30_mods) #worse with eortc base, p_loo is 21 without, 23.8 with
+
+#get the CrI and Pr(Sup) from the models
+#flipping the outcome as we did the reverse
+daoh30h <- hypothesis(daoh30_mod,c("grp < 0"))[["hypothesis"]] %>%
+  dplyr::select(Post.Prob)
+
+daohrr <- avg_comparisons(daoh30_mod,comparison = "ratio",variables = "grp") %>%
+  mutate(estimate = 1/estimate,
+         conf.low = 1/conf.low,
+         conf.high = 1/conf.high,
+         RR = paste0(round(estimate,2)," (",round(conf.high,2),", ",round(conf.low,2),")"),
+         outcome = "DAOH") %>%
+  cbind(daoh30h)
+#combine with the crude outcome
+daoh30_res <- bo_p2 %>% 
+  filter(time == "1") %>%
+  group_by(treatment) %>% 
+  summarise(daoh = paste0(round(median(daoh,na.rm=T),2)," (",sum(!is.na(daoh)),
+                                   ", ",round(quantile(daoh,probs=c(0.25),na.rm=T),2),
+                          ", ",round(quantile(daoh,probs=c(0.75),na.rm=T),2),")")) %>% 
+  pivot_wider(names_from=treatment,values_from=daoh) %>%
+  cbind(daohrr)
+
+saveRDS(daoh30_res,here("Output","bo_daoh30.RDS"))
+```
+
+
+### 90 days
+
+```{r}
+daoh_90 <- bo_p2 %>% filter(time == "3") %>% mutate(rev_daoh = 90 - daoh)
+
+# daoh_imp <- readRDS(here("Data","p2bo_imp_long.RDS")) %>%
+#   mutate(treatment = ifelse(group_allocation == "1","Treatment","Control"),
+#          grp = ifelse(group_allocation == "1",1,0)) %>%
+#   filter(.imp == 1) %>%
+#   mutate(rev_daoh = 90 - daoh) %>%
+#   group_by(record_id) %>%
+#   mutate(summary_base = max(ifelse(time=="0",summary_score,NA),na.rm=T)) %>%
+#   filter(time == "3")
+
+daoh90_mod <- brm(rev_daoh ~ grp + redcap_data_access_group.factor + stoma.factor + surgery_type.factor,
+                       data=daoh_90,family=negbinomial(),iter=10000,seed=46137112,
+                       prior = c(prior(normal(0,10),class=b),
+                                 #a prior for random intercept,
+                                 prior(student_t(3,0,100),class=Intercept)))
+
+#test <- loo(daoh90_mod)
+#tests <- loo(daoh90_mods) #fits worse with summary score p_loo 7.3 with 8.7 without
+
+#get the CrI and Pr(Sup) from the models
+#flipping the outcome as we did the reverse
+daoh90h <- hypothesis(daoh90_mod,c("grp < 0"))[["hypothesis"]] %>%
+  dplyr::select(Post.Prob)
+
+daohrr <- avg_comparisons(daoh90_mod,comparison = "ratio",variables = "grp") %>%
+  mutate(estimate = 1/estimate,
+         conf.low = 1/conf.low,
+         conf.high = 1/conf.high,
+         RR = paste0(round(estimate,2)," (",round(conf.high,2),", ",round(conf.low,2),")"),
+         outcome = "DAOH") %>%
+  cbind(daoh90h)
+
+#combine with the crude outcome
+daoh90_res <- bo_p2 %>% 
+  filter(time == "3") %>%
+  group_by(treatment) %>% 
+  summarise(daoh = paste0(round(median(daoh,na.rm=T),2)," (",sum(!is.na(daoh)),
+                                   ", ",round(quantile(daoh,probs=0.25,na.rm=T),2),
+                          ", ",round(quantile(daoh,probs=0.75,na.rm=T),2),")")) %>% 
+  pivot_wider(names_from=treatment,values_from=daoh) %>%
+  cbind(daohrr)
+
+saveRDS(daoh90_res,here("Output","bo_daoh90.RDS"))
+```
+
+## Health service utilisation
+
+```{r}
+cost_imp <- bo_p2_imp %>% mutate(costi = round(cost,0)) %>%
+    group_by(record_id) %>%
+  mutate(summary_base = max(ifelse(time=="0",summary_score,NA),na.rm=T)) %>%
+  filter(time == "3")
+
+cost_split <- split(x=cost_imp,f=cost_imp$.imp)
+
+cost_mod <- brm(costi ~ grp + redcap_data_access_group.factor + stoma.factor + surgery_type.factor,
+               data=cost_split,family=negbinomial,iter=13000,seed=46137112,
+               prior = c(prior(normal(0,10),class=b),
+                         prior(student_t(3,0,100),class=Intercept)))
+
+#test <- loo(cost_mod)
+#tests <- loo(cost_mods) #summary base is worse fit - with = 6.1, without = 5.5
+
+#get the CrI and Pr(Sup) from the models
+costh <- hypothesis(cost_mod,c("grp < 0"),alpha=0.025)[["hypothesis"]] %>%
+  dplyr::select(Hypothesis,Estimate,Post.Prob,CI.Lower,CI.Upper) %>%
+  mutate(RR = paste0(sprintf("%.2f",round(exp(Estimate),2))," (", round(exp(CI.Lower),2),", ",round(exp(CI.Upper),2),")"))
+
+#combine with the crude outcome
+cost_res <- bo_p2 %>% 
+  filter(time == "3") %>%
+  group_by(treatment) %>% 
+  summarise(cost = paste0(round(median(cost,na.rm=T),2)," (",sum(!is.na(cost)),
+                                   ", ",round(quantile(cost,probs=0.25,na.rm=T),2),
+                          ", ",round(quantile(cost,probs=0.75,na.rm=T),2),")")) %>% 
+  pivot_wider(names_from=treatment,values_from=cost) %>%
+  cbind(costh)
+
+saveRDS(cost_res,here("Output","cost_res.RDS"))
+```
+
+## Combine
+
+```{r}
+c30_res <- readRDS(here("Output","bo_p2_c30.RDS")) %>% mutate(outcome = "EORTC QLQ-C30 (mean (N, SD))")
+qor_res <- readRDS(here("Output","Bo_qor_res.RDS")) %>% mutate(outcome = "Quality of recovery (mean (N, SD))")
+daoh30_res <- readRDS(here("Output","bo_daoh30.RDS")) %>% mutate(time = "1",outcome = "DAOH (median (N, IQR))")
+daoh90_res <- readRDS(here("Output","bo_daoh90.RDS")) %>% mutate(time = "3",outcome = "DAOH (median (N, IQR))")
+cost_res <- readRDS(here("Output","cost_res.RDS")) %>% mutate(outcome = "Health service utilisation (median (N, IQR))",time="3")
+
+res_models <- bind_rows(c30_res,qor_res,daoh30_res,daoh90_res,cost_res) %>%
+  mutate(time = case_when(time == "1" ~ "30 days",
+                          time == "3" ~ "90 days",
+                          time == "hosp" ~ "2 days",
+                          time == "0" ~ "Baseline"),
+         order = row_number(),
+         order = case_when(time == "Baseline" & outcome == "Quality of recovery (mean (N, SD))" ~ 1.9,
+                           time == "2 days" & outcome == "Quality of recovery (mean (N, SD))" ~ 1.95,
+                           .default=order),
+         estimate = case_when(!is.na(MD) ~ paste0("MD = ",MD),
+                              !is.na(RR) ~ paste0("RR = ",RR))) %>%
+  arrange(order)%>%
+  select(outcome,time,Treatment,Control,estimate,Post.Prob)
+
+saveRDS(res_models,here("Output","bo_p2_res.RDS"))
+```
+
+
