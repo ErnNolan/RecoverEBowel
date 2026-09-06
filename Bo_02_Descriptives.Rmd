@@ -1,0 +1,155 @@
+---
+title: "Bowel Descriptives"
+output: html_document
+date: "2025-10-24"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#to make the renv intially
+#renv::init()
+
+#renv friendly loading of packages.
+#dont use pacman for this as it may overwrite the version of the package used in renv
+required_packages <- c("tidyverse", "here", "renv","Hmisc","gtsummary")
+
+missing <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
+if (length(missing) > 0) {
+  stop("Missing packages: ", paste(missing, collapse = ", "), 
+       ". Please run renv::restore() to install them.")
+}
+#if a package isnt installed in renv::restore(), do this: 
+#renv::install("tidyverse")
+
+library(renv)
+library(tidyverse)
+library(here)
+library(Hmisc)
+library(gtsummary)
+```
+
+Read in the data
+```{r}
+bowel <- readRDS(here("Data","bowel.RDS"))
+#stockings variable missing
+
+
+```
+
+```{r}
+#table 1
+demo_tab <- tbl_summary(data=bowel,by=grp,
+            include=c(age,gender.factor,country_of_birth.factor,
+                      first_nations.factor,language_home.factor,
+                      marital_status.factor,education.factor,living.factor,
+                      employment.factor,remoteness.factor,priv_health.factor,
+                      internet_time.factor),
+            missing="ifany",missing_text="Missing",
+            label = list(age ~ "Age, mean (SD)",
+                         gender.factor ~ "Gender, n (%)",
+                         country_of_birth.factor ~ "Country of birth, n (%)",
+                         first_nations.factor ~ "Aboriginal and/or Torres Strait Islander, n (%)",
+                         language_home.factor ~ "Language spoken at home, n (%)",
+                         marital_status.factor ~ "Marital status, n (%)",
+                         education.factor ~ "Level of education, n (%)",
+                         living.factor ~ "Living arrangements, n (%)",
+                         employment.factor ~ "Employment status, n (%)",
+                         remoteness.factor ~ "Geographical remoteness, n (%)",
+                         priv_health.factor ~ "Private health insurance, n (%)",
+                         internet_time.factor ~ "Internet usage, n (%)"),
+            statistic = list(all_continuous() ~ "{mean} ({sd})")) %>%
+    add_overall(last=TRUE) %>%
+  modify_footnote(everything() ~ NA)
+#walk_10 was calculated from a variable used in table 8 so not included atm
+
+saveRDS(demo_tab,here("Output","Bo_demo_tab.RDS"))
+
+```
+
+```{r}
+
+#table 3
+char_tab <- tbl_summary(data=bowel,by=grp,
+            include=c(asa.factor,major_surgery.factor,stoma,surgery_type.factor,surgical_site.factor),
+            missing="ifany",missing_text = "Missing",
+            statistic = list(all_continuous() ~ "{mean} ({sd})"),
+            label = list(asa.factor ~ "Extent of cancer at diagnosis, n (%)",
+                         major_surgery.factor ~ "Major surgery, n (%)",
+                         stoma ~ "Presence of stoma, n (%)",
+                         surgery_type.factor ~ "Type of surgery, n (%)",
+                         surgical_site.factor ~ "Surgical site, n (%)")) %>%
+  add_overall(last=TRUE) %>%
+  modify_footnote(everything() ~ NA)
+
+saveRDS(char_tab,here("Output","Bo_char_tab.RDS"))
+
+```
+
+```{r}
+#table 5 (now table 4)
+#TO BE DONE ANALYSIS 2
+```
+
+
+```{r}
+#table 6 (now table 5)
+qor_tab <- tbl_summary(data=bowel,by=grp,include=c(qor_tot),
+            missing = "ifany",missing_text="Missing",
+            label = list(qor_tot ~ "Quality of Recovery, mean (SD)"),
+            statistic = list(all_continuous() ~ "{mean} ({sd})"))
+
+saveRDS(qor_tab,here("Output","Bo_qor_tab.RDS"))
+
+```
+
+```{r}
+#ERAS bahaviours
+#table 8 (now 7)
+eras_desc <- tbl_summary(data=bowel,by=grp,missing="ifany",missing_text = "Missing",
+            include=c(pt_device_hosp.factor,
+                      meals_hosp.factor,snacks_hosp.factor,liquid_hosp.factor,
+                      oob_mins_hosp,walk_hosp_mins_total,breath_hosp.factor),
+            label = list(pt_device_hosp.factor ~ "Patient-controlled device to administer pain medication, n (%)",
+                         meals_hosp.factor ~ "Meals attempted, n (%)",
+                         snacks_hosp.factor ~ "Snacks attempted, n (%)",
+                         liquid_hosp.factor ~ "Cups of liquid, n (%)",
+                         oob_mins_hosp ~ "Time spent out of bed (mins), median (IQR)",
+                         walk_hosp_mins_total ~ "Time spent walking or moving around (mins), median (IQR)",
+                         breath_hosp.factor ~ "Number breathing exercises, n (%)"),
+            type = list(oob_mins_hosp ~ "continuous"))
+
+saveRDS(eras_desc,here("Output","Bo_eras_desc.RDD"))
+```
+
+```{r}
+#knowledge
+knowledge_tab <-tbl_summary(data=bowel,by=grp,missing="ifany",missing_text="Missing",
+            include=c(able_improve_hosp.factor,understand_improve_hosp.factor),
+            label = list(able_improve_hosp.factor ~ "I am able to do things to enhance or improve my recovery, n (%)",
+                         understand_improve_hosp.factor ~ "I understand the things I need to do to enhance /improve my recovery, n (%)"))
+
+saveRDS(knowledge_tab,here("Output","Bo_knowledge_tab.RDS"))
+```
+
+
+```{r}
+#descriptives for the new table in manuscript
+
+tbl_strata(data=bowel,
+           strata = group_allocation,
+           .tbl_fun = ~.x %>%
+           tbl_summary(by=gender.factor,include=los))
+
+tbl_strata(data=bowel,
+           strata = group_allocation,
+           .tbl_fun = ~.x %>%
+           tbl_summary(by=surgical_site.factor,include=los))
+
+tbl_strata(data=bowel,
+           strata = group_allocation,
+           .tbl_fun = ~.x %>%
+           tbl_summary(by=redcap_data_access_group,include=los))
+```
+

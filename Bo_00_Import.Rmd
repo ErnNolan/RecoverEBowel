@@ -1,0 +1,958 @@
+---
+title: "00_Import for bowel cancer study"
+output: html_document
+date: "2025-08-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#to make the renv intially
+#renv::init()
+
+#renv friendly loading of packages.
+#dont use pacman for this as it may overwrite the version of the package used in renv
+required_packages <- c("tidyverse", "here", "renv")
+missing <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
+if (length(missing) > 0) {
+  stop("Missing packages: ", paste(missing, collapse = ", "), 
+       ". Please run renv::restore() to install them.")
+}
+#if a package isnt installed in renv::restore(), do this: 
+#renv::install("tidyverse")
+
+library(renv)
+library(tidyverse)
+library(here)
+library(Hmisc)
+
+```
+
+```{r}
+
+#Read Data
+#data <- read.csv(here("Data","Original","RecoverEsupportBowel_blinded_2025-10-21.csv"))
+data <- read.csv(here("Data","Original","RecoverEsupportMainT-ReportForENolanPrima_DATA_2025-11-03_1258.csv"))
+
+# 
+# #Setting Labels
+# label(data$record_id) = "Record ID"
+# label(data$redcap_data_access_group) = "Data Access Group"
+# label(data$group_allocation) = "Group Allocation"
+# label(data$per_protocol) = "Include participant in the per protocol analysis?"
+# label(data$master_age) = "Master age Calculated by subtracting surgery date from DOB"
+# label(data$master_gender) = "Master Sex at birth"
+# label(data$master_country_of_birth) = "Master country of birth"
+# label(data$master_first_nations) = "Master Aboriginal or Torres Strait Islander origin "
+# label(data$master_language_home) = "Master language spoken at home"
+# label(data$master_marital_status) = "Master marital status"
+# label(data$master_education) = "Master education"
+# label(data$master_living) = "Master living arrangements"
+# label(data$master_employment) = "Master employment status"
+# label(data$master_asa) = "Master ASA score"
+# label(data$master_remoteness) = "Master geographical remoteness"
+# label(data$master_internet_time) = "Master regularity of internet access"
+# label(data$master_major_surgery) = "Master major surgery"
+# label(data$master_priv_health) = "Master private health insurance"
+# label(data$master_site) = "Master public or private hospital"
+# label(data$master_stoma) = "Master stoma during surgical admission"
+# label(data$master_surgery_type) = "Master surgery type"
+# label(data$master_surgical_site) = "Master surgical site at pre-op"
+# label(data$master_surgeon) = "Master surgeon"
+# label(data$actual_surgery_date) = "Patients surgery date"
+# label(data$actual_discharge_date) = "Actual discharge date"
+# label(data$pt_device_hosp) = "The day after your surgery, did you have a patient-controlled device to administer pain medication? Please note, the day after surgery refers to the first full day that you spent on the ward after your surgery. "
+# label(data$meals_hosp) = "The day after your surgery, how many meals did you attempt to eat at least some of? (i.e. breakfast, lunch, dinner) "
+# label(data$snacks_hosp) = "The day after your surgery, how many snacks did you attempt to eat at least some of? (i.e. morning tea, afternoon tea, supper) "
+# label(data$liquid_hosp) = "The day after your surgery, how many cups of liquid did you drink?Please include all fluids e.g. water, cordial, juice, tea, coffee, Ensure® / Resource® supplements etc. A standard 600ml water bottle = 2.5 cups of liquid "
+# label(data$oob_hrs_hosp) = "Out of bed hours"
+# label(data$oob_mins_hosp) = "Out of bed minutes"
+# label(data$bed_hosp_mins_total) = "Calculated total number of minutes out of bed (hours * 60) + mins"
+# label(data$walk_hrs_hosp) = "walk hours"
+# label(data$walk_mins_hosp) = "walk mins"
+# label(data$walk_hosp_mins_total) = "Calculated total number of minutes walking (hours * 60) + mins"
+# label(data$breath_hosp) = "The day after your surgery, during your waking hours, how many times did you deliberately deep breathe, cough, or huff and puff?"
+# label(data$able_improve_hosp) = "I feel as though I am able to do things to enhance or improve my recovery"
+# label(data$understand_improve_hosp) = "I understand the things I need to do to enhance or improve my recovery"
+# label(data$qor1_hosp) = "Able to breathe easily"
+# label(data$qor2_hosp) = "Been able to enjoy food"
+# label(data$qor3_hosp) = "Feeling rested"
+# label(data$qor4_hosp) = "Have had a good sleep"
+# label(data$qor5_hosp) = "Able to look after personal toilet and hygiene unaided"
+# label(data$qor6_hosp) = "Able to communicate with family or friends"
+# label(data$qor7_hosp) = "Getting support from hospital doctors and nurses"
+# label(data$qor8_hosp) = "Able to return to work or usual home activities"
+# label(data$qor9_hosp) = "Feeling comfortable and in control"
+# label(data$qor10_hosp) = "Having a feeling of general wellbeing"
+# label(data$qor_11_hosp) = "Moderate pain"
+# label(data$qor_12_hosp) = "Severe pain"
+# label(data$qor_13_hosp) = "Nausea or vomiting"
+# label(data$qor_14_hosp) = "Feeling worried or anxious"
+# label(data$qor_15_hosp) = "Feeling sad or depressed"
+# label(data$inhospital_assessment_complete) = "Complete?"
+# #Setting Units
+
+
+#Setting Factors(will create new variable for factors)
+mapping_redcap_data_access_group = c(
+	"cmn" = "CMN",
+	"jhh" = "JHH",
+	"nph" = "NPH",
+	"tmh" = "TMH"
+)
+data$redcap_data_access_group.factor = factor(data$redcap_data_access_group, levels = names(mapping_redcap_data_access_group), labels = mapping_redcap_data_access_group)
+
+mapping_per_protocol = c(
+	"1" = "Yes",
+	"0" = "No"
+)
+data$per_protocol.factor = factor(data$per_protocol, levels = names(mapping_per_protocol), labels = mapping_per_protocol)
+
+mapping_master_gender = c(
+	"0" = "Male",
+	"1" = "Female",
+	"96" = "Other"
+)
+data$master_gender.factor = factor(data$master_gender, levels = names(mapping_master_gender), labels = mapping_master_gender)
+
+mapping_master_country_of_birth = c(
+	"1" = "Australia",
+	"0" = "Other than Australia",
+	"98" = "Missing"
+)
+data$master_country_of_birth.factor = factor(data$master_country_of_birth, levels = names(mapping_master_country_of_birth), labels = mapping_master_country_of_birth)
+
+mapping_master_first_nations = c(
+	"1" = "Yes",
+	"0" = "No",
+	"98" = "Missing"
+)
+data$master_first_nations.factor = factor(data$master_first_nations, levels = names(mapping_master_first_nations), labels = mapping_master_first_nations)
+
+mapping_master_language_home = c(
+	"1" = "English",
+	"0" = "Not english",
+	"98" = "Missing"
+)
+data$master_language_home.factor = factor(data$master_language_home, levels = names(mapping_master_language_home), labels = mapping_master_language_home)
+
+mapping_master_marital_status = c(
+	"1" = "In a relationship",
+	"0" = "Not in a relationship",
+	"98" = "Missing"
+)
+data$master_marital_status.factor = factor(data$master_marital_status, levels = names(mapping_master_marital_status), labels = mapping_master_marital_status)
+
+mapping_master_education = c(
+	"1" = "Year 10 and below",
+	"2" = "Year 12",
+	"3" = "Trade/vocational",
+	"4" = "University",
+	"98" = "Missing"
+)
+data$master_education.factor = factor(data$master_education, levels = names(mapping_master_education), labels = mapping_master_education)
+
+mapping_master_living = c(
+	"0" = "Living alone",
+	"1" = "Living in residential care, e.g., nursing home",
+	"2" = "Living with others (not residential care)",
+	"98" = "Missing"
+)
+data$master_living.factor = factor(data$master_living, levels = names(mapping_master_living), labels = mapping_master_living)
+
+mapping_master_employment = c(
+	"1" = "Paid employment (inc sick leave)",
+	"2" = "Retired and disability pension",
+	"0" = "Not paid employment",
+	"98" = "Missing"
+)
+data$master_employment.factor = factor(data$master_employment, levels = names(mapping_master_employment), labels = mapping_master_employment)
+
+mapping_master_asa = c(
+	"1" = "ASA I",
+	"2" = "ASA II",
+	"3" = "ASA III",
+	"4" = "ASA IV",
+	"5" = "ASA V",
+	"98" = "Missing"
+)
+data$master_asa.factor = factor(data$master_asa, levels = names(mapping_master_asa), labels = mapping_master_asa)
+
+mapping_master_remoteness = c(
+	"1" = "Same as JHH, e.g., Major cities of Australia",
+	"0" = "Not same as JHH",
+	"98" = "Missing"
+)
+data$master_remoteness.factor = factor(data$master_remoteness, levels = names(mapping_master_remoteness), labels = mapping_master_remoteness)
+
+mapping_master_internet_time = c(
+	"1" = "Daily",
+	"0" = "Less often than daily",
+	"98" = "Missing"
+)
+data$master_internet_time.factor = factor(data$master_internet_time, levels = names(mapping_master_internet_time), labels = mapping_master_internet_time)
+
+mapping_master_major_surgery = c(
+	"1" = "Yes",
+	"0" = "No",
+	"98" = "Missing"
+)
+data$master_major_surgery.factor = factor(data$master_major_surgery, levels = names(mapping_master_major_surgery), labels = mapping_master_major_surgery)
+
+mapping_master_priv_health = c(
+	"1" = "Yes",
+	"0" = "No",
+	"98" = "Missing"
+)
+data$master_priv_health.factor = factor(data$master_priv_health, levels = names(mapping_master_priv_health), labels = mapping_master_priv_health)
+
+mapping_master_site = c(
+	"1" = "Public",
+	"2" = "Private"
+)
+data$master_site.factor = factor(data$master_site, levels = names(mapping_master_site), labels = mapping_master_site)
+
+mapping_master_stoma = c(
+	"1" = "Yes",
+	"0" = "No",
+	"98" = "Missing"
+)
+data$master_stoma.factor = factor(data$master_stoma, levels = names(mapping_master_stoma), labels = mapping_master_stoma)
+
+mapping_master_surgery_type = c(
+	"1" = "Open",
+	"0" = "Minimally invasive (laparoscopic)",
+	"96" = "Other",
+	"98" = "Missing"
+)
+data$master_surgery_type.factor = factor(data$master_surgery_type, levels = names(mapping_master_surgery_type), labels = mapping_master_surgery_type)
+
+mapping_master_surgical_site = c(
+	"1" = "Bowel",
+	"0" = "Rectal",
+	"96" = "Other",
+	"98" = "Missing"
+)
+data$master_surgical_site.factor = factor(data$master_surgical_site, levels = names(mapping_master_surgical_site), labels = mapping_master_surgical_site)
+
+mapping_master_surgeon = c(
+	"1" = "Surgeon 1",
+	"2" = "Surgeon 2",
+	"3" = "Surgeon 3",
+	"4" = "Surgeon 4",
+	"5" = "Surgeon  5",
+	"6" = "Surgeon 6",
+	"7" = "Surgeon 7",
+	"8" = "Surgeon 8",
+	"9" = "Surgeon 9",
+	"96" = "Other surgeon",
+	"98" = "Missing"
+)
+data$master_surgeon.factor = factor(data$master_surgeon, levels = names(mapping_master_surgeon), labels = mapping_master_surgeon)
+
+mapping_pt_device_hosp = c(
+	"1" = "Yes",
+	"2" = "No",
+	"3" = "Dont know"
+)
+data$pt_device_hosp.factor = factor(data$pt_device_hosp, levels = names(mapping_pt_device_hosp), labels = mapping_pt_device_hosp)
+
+mapping_meals_hosp = c(
+	"1" = "3 or more",
+	"2" = "2",
+	"3" = "1",
+	"4" = "0"
+)
+data$meals_hosp.factor = factor(data$meals_hosp, levels = names(mapping_meals_hosp), labels = mapping_meals_hosp)
+
+mapping_snacks_hosp = c(
+	"1" = "3 or more",
+	"2" = "2",
+	"3" = "1",
+	"4" = "0"
+)
+data$snacks_hosp.factor = factor(data$snacks_hosp, levels = names(mapping_snacks_hosp), labels = mapping_snacks_hosp)
+
+mapping_liquid_hosp = c(
+	"1" = "None",
+	"2" = "1 - 2 cups",
+	"3" = "3 cups",
+	"4" = "4 cups",
+	"5" = "5 or more cups"
+)
+data$liquid_hosp.factor = factor(data$liquid_hosp, levels = names(mapping_liquid_hosp), labels = mapping_liquid_hosp)
+
+mapping_breath_hosp = c(
+	"1" = "Every hour",
+	"2" = "Every 2-3 hours",
+	"3" = "Every 4-5 hours",
+	"4" = "Once or twice",
+	"5" = "Not at all"
+)
+data$breath_hosp.factor = factor(data$breath_hosp, levels = names(mapping_breath_hosp), labels = mapping_breath_hosp)
+
+mapping_able_improve_hosp = c(
+	"1" = "Strongly agree",
+	"2" = "Agree",
+	"3" = "Neither agree nor disagree",
+	"4" = "Disagree",
+	"5" = "Strongly disagree"
+)
+data$able_improve_hosp.factor = factor(data$able_improve_hosp, levels = names(mapping_able_improve_hosp), labels = mapping_able_improve_hosp)
+
+mapping_understand_improve_hosp = c(
+	"1" = "Strongly agree",
+	"2" = "Agree",
+	"3" = "Neither agree nor disagree",
+	"4" = "Disagree",
+	"5" = "Strongly disagree"
+)
+data$understand_improve_hosp.factor = factor(data$understand_improve_hosp, levels = names(mapping_understand_improve_hosp), labels = mapping_understand_improve_hosp)
+
+mapping_qor1_hosp = c(
+	"0" = "None of the time (poor)",
+	"1" = "1",
+	"2" = "2",
+	"3" = "3",
+	"4" = "4",
+	"5" = "5",
+	"6" = "6",
+	"7" = "7",
+	"8" = "8",
+	"9" = "9",
+	"10" = "All of the time (excellent)"
+)
+data$qor1_hosp.factor = factor(data$qor1_hosp, levels = names(mapping_qor1_hosp), labels = mapping_qor1_hosp)
+
+mapping_qor2_hosp = c(
+	"0" = "None of the time (poor)",
+	"1" = "1",
+	"2" = "2",
+	"3" = "3",
+	"4" = "4",
+	"5" = "5",
+	"6" = "6",
+	"7" = "7",
+	"8" = "8",
+	"9" = "9",
+	"10" = "All of the time (excellent)"
+)
+data$qor2_hosp.factor = factor(data$qor2_hosp, levels = names(mapping_qor2_hosp), labels = mapping_qor2_hosp)
+
+mapping_qor3_hosp = c(
+	"0" = "None of the time (poor)",
+	"1" = "1",
+	"2" = "2",
+	"3" = "3",
+	"4" = "4",
+	"5" = "5",
+	"6" = "6",
+	"7" = "7",
+	"8" = "8",
+	"9" = "9",
+	"10" = "All of the time (excellent)"
+)
+data$qor3_hosp.factor = factor(data$qor3_hosp, levels = names(mapping_qor3_hosp), labels = mapping_qor3_hosp)
+
+mapping_qor4_hosp = c(
+	"0" = "None of the time (poor)",
+	"1" = "1",
+	"2" = "2",
+	"3" = "3",
+	"4" = "4",
+	"5" = "5",
+	"6" = "6",
+	"7" = "7",
+	"8" = "8",
+	"9" = "9",
+	"10" = "All of the time (excellent)"
+)
+data$qor4_hosp.factor = factor(data$qor4_hosp, levels = names(mapping_qor4_hosp), labels = mapping_qor4_hosp)
+
+mapping_qor5_hosp = c(
+	"0" = "None of the time (poor)",
+	"1" = "1",
+	"2" = "2",
+	"3" = "3",
+	"4" = "4",
+	"5" = "5",
+	"6" = "6",
+	"7" = "7",
+	"8" = "8",
+	"9" = "9",
+	"10" = "All of the time (excellent)"
+)
+data$qor5_hosp.factor = factor(data$qor5_hosp, levels = names(mapping_qor5_hosp), labels = mapping_qor5_hosp)
+
+mapping_qor6_hosp = c(
+	"0" = "None of the time (poor)",
+	"1" = "1",
+	"2" = "2",
+	"3" = "3",
+	"4" = "4",
+	"5" = "5",
+	"6" = "6",
+	"7" = "7",
+	"8" = "8",
+	"9" = "9",
+	"10" = "All of the time (excellent)"
+)
+data$qor6_hosp.factor = factor(data$qor6_hosp, levels = names(mapping_qor6_hosp), labels = mapping_qor6_hosp)
+
+mapping_qor7_hosp = c(
+	"0" = "None of the time (poor)",
+	"1" = "1",
+	"2" = "2",
+	"3" = "3",
+	"4" = "4",
+	"5" = "5",
+	"6" = "6",
+	"7" = "7",
+	"8" = "8",
+	"9" = "9",
+	"10" = "All of the time (excellent)"
+)
+data$qor7_hosp.factor = factor(data$qor7_hosp, levels = names(mapping_qor7_hosp), labels = mapping_qor7_hosp)
+
+mapping_qor8_hosp = c(
+	"0" = "None of the time (poor)",
+	"1" = "1",
+	"2" = "2",
+	"3" = "3",
+	"4" = "4",
+	"5" = "5",
+	"6" = "6",
+	"7" = "7",
+	"8" = "8",
+	"9" = "9",
+	"10" = "All of the time (excellent)"
+)
+data$qor8_hosp.factor = factor(data$qor8_hosp, levels = names(mapping_qor8_hosp), labels = mapping_qor8_hosp)
+
+mapping_qor9_hosp = c(
+	"0" = "None of the time (poor)",
+	"1" = "1",
+	"2" = "2",
+	"3" = "3",
+	"4" = "4",
+	"5" = "5",
+	"6" = "6",
+	"7" = "7",
+	"8" = "8",
+	"9" = "9",
+	"10" = "All of the time (excellent)"
+)
+data$qor9_hosp.factor = factor(data$qor9_hosp, levels = names(mapping_qor9_hosp), labels = mapping_qor9_hosp)
+
+mapping_qor10_hosp = c(
+	"0" = "None of the time (poor)",
+	"1" = "1",
+	"2" = "2",
+	"3" = "3",
+	"4" = "4",
+	"5" = "5",
+	"6" = "6",
+	"7" = "7",
+	"8" = "8",
+	"9" = "9",
+	"10" = "All of the time (excellent)"
+)
+data$qor10_hosp.factor = factor(data$qor10_hosp, levels = names(mapping_qor10_hosp), labels = mapping_qor10_hosp)
+
+mapping_qor_11_hosp = c(
+	"10" = "None of the time (excellent)",
+	"9" = "9",
+	"8" = "8",
+	"7" = "7",
+	"6" = "6",
+	"5" = "5",
+	"4" = "4",
+	"3" = "3",
+	"2" = "2",
+	"1" = "1",
+	"0" = "All of the time (poor)"
+)
+data$qor_11_hosp.factor = factor(data$qor_11_hosp, levels = names(mapping_qor_11_hosp), labels = mapping_qor_11_hosp)
+
+mapping_qor_12_hosp = c(
+	"10" = "None of the time (excellent)",
+	"9" = "9",
+	"8" = "8",
+	"7" = "7",
+	"6" = "6",
+	"5" = "5",
+	"4" = "4",
+	"3" = "3",
+	"2" = "2",
+	"1" = "1",
+	"0" = "All of the time (poor)"
+)
+data$qor_12_hosp.factor = factor(data$qor_12_hosp, levels = names(mapping_qor_12_hosp), labels = mapping_qor_12_hosp)
+
+mapping_qor_13_hosp = c(
+	"10" = "None of the time (excellent)",
+	"9" = "9",
+	"8" = "8",
+	"7" = "7",
+	"6" = "6",
+	"5" = "5",
+	"4" = "4",
+	"3" = "3",
+	"2" = "2",
+	"1" = "1",
+	"0" = "All of the time (poor)"
+)
+data$qor_13_hosp.factor = factor(data$qor_13_hosp, levels = names(mapping_qor_13_hosp), labels = mapping_qor_13_hosp)
+
+mapping_qor_14_hosp = c(
+	"10" = "None of the time (excellent)",
+	"9" = "9",
+	"8" = "8",
+	"7" = "7",
+	"6" = "6",
+	"5" = "5",
+	"4" = "4",
+	"3" = "3",
+	"2" = "2",
+	"1" = "1",
+	"0" = "All of the time (poor)"
+)
+data$qor_14_hosp.factor = factor(data$qor_14_hosp, levels = names(mapping_qor_14_hosp), labels = mapping_qor_14_hosp)
+
+mapping_qor_15_hosp = c(
+	"10" = "None of the time (excellent)",
+	"9" = "9",
+	"8" = "8",
+	"7" = "7",
+	"6" = "6",
+	"5" = "5",
+	"4" = "4",
+	"3" = "3",
+	"2" = "2",
+	"1" = "1",
+	"0" = "All of the time (poor)"
+)
+data$qor_15_hosp.factor = factor(data$qor_15_hosp, levels = names(mapping_qor_15_hosp), labels = mapping_qor_15_hosp)
+
+mapping_inhospital_assessment_complete = c(
+	"0" = "Incomplete",
+	"1" = "Unverified",
+	"2" = "Complete"
+)
+data$inhospital_assessment_complete.factor = factor(data$inhospital_assessment_complete, levels = names(mapping_inhospital_assessment_complete), labels = mapping_inhospital_assessment_complete)
+```
+
+```{r}
+saveRDS(data,here("Data","bowel_init.RDS"))
+```
+
+#Phase 2 import
+
+```{r}
+
+#Read Data
+data=read.csv(here("Data","Original",'BoRecoverEsupportMainT-SecondaryOutcomesRep_DATA_2026-01-20_1518.csv'))
+#Setting Labels
+
+# label(data$record_id) = "Record ID"
+# label(data$redcap_data_access_group) = "Data Access Group"
+# label(data$group_allocation) = "Group Allocation"
+# label(data$per_protocol) = "Include participant in the per protocol analysis?"
+# label(data$master_do_not_impute) = "DO NOT IMPUTE missing data for the 31-90 day period for this record (manually entered by study staff)"
+# label(data$master_age) = "Master age Calculated by subtracting surgery date from DOB"
+# label(data$master_gender) = "Master Sex at birth"
+# label(data$master_country_of_birth) = "Master country of birth"
+# label(data$master_first_nations) = "Master Aboriginal or Torres Strait Islander origin "
+# label(data$master_language_home) = "Master language spoken at home"
+# label(data$master_marital_status) = "Master marital status"
+# label(data$master_education) = "Master education"
+# label(data$master_living) = "Master living arrangements"
+# label(data$master_employment) = "Master employment status"
+# label(data$master_asa) = "Master ASA score"
+# label(data$master_remoteness) = "Master geographical remoteness"
+# label(data$master_internet_time) = "Master regularity of internet access"
+# label(data$master_major_surgery) = "Master major surgery"
+# label(data$master_priv_health) = "Master private health insurance"
+# label(data$master_site) = "Master public or private hospital"
+# label(data$master_stoma) = "Master stoma during surgical admission"
+# label(data$master_surgery_type) = "Master surgery type"
+# label(data$master_surgical_site) = "Master surgical site at pre-op"
+# label(data$master_surgeon) = "Master surgeon"
+# label(data$master_daoh_30_days) = "DAOH at 1 month post surgery Calculated by subtracting the LoS and number of nights readmitted from 30 days"
+# label(data$master_daoh_90_days) = "DAOH at 3 months post surgery Calculated by subtracting the LoS and number of nights readmitted from 90 days"
+# label(data$cost_1mo) = "Cost per patient in1 month since surgery (1 mo survey - day 0 to 30)"
+# label(data$cost_2mo) = "Cost per patientin the 2 months between 1mo fup and 3mo fup (3 mo survey - day 31 to 60)"
+# label(data$cost_3mo) = "Cost per patient in 3 months since surgery (3 mo alt - day 0 to 90)"
+# label(data$num_ed_1mo) = "Number of ED presentations in1 month since surgery (1mth survey - day 0 to 30)"
+# label(data$num_ed_2mo) = "Number of ED presentations in the 2 months between 1mo fup and 3mo fup (3mth survey - day 31 to 60)"
+# label(data$num_ed_3mo) = "Number of ED presentations in3 months since surgery (3mth alt survey - day 0 to 90) This is for those ppts who only did the 3 month alt survey"
+# label(data$num_admissions_1mo) = "Number of ADMISSIONS in1 month since surgery"
+# label(data$num_nights_admitted_1mo) = "Number of NIGHTS ppt has been admitted to any facility in 1 month since surgery"
+# label(data$num_admissions_2) = "Number of ADMISSIONS in the 2 months between 1mo fup and 3mo fup"
+# label(data$num_nights_admitted_2) = "Number of NIGHTS ppt has been admitted to any facility in the 2 months between 1mo fup and 3mo fup"
+# label(data$num_nights_admitted_3mo) = "Number of NIGHTS ppt has been admitted to any facility in 3 months since surgery"
+# label(data$a1_0) = "Do you have any trouble doing strenuous activities, like carrying a heavy shopping bag or a suitcase?"
+# label(data$a2_0) = "Do you have any trouble taking a long walk?"
+# label(data$a3_0) = "Do you have any trouble taking a short walk outside of the house?"
+# label(data$a4_0) = "Do you need to stay in bed or a chair during the day?"
+# label(data$a5_0) = "Do you need help with eating, dressing, washing yourself or using the toilet?"
+# label(data$a6_0) = "Were you limited in doing either your work or other daily activities?"
+# label(data$a7_0) = "Were you limited in pursuing your hobbies or other leisure time activities?"
+# label(data$a8_0) = "Were you short of breath?"
+# label(data$a9_0) = "Have you had pain?"
+# label(data$a10_0) = "Did you need to rest?"
+# label(data$a11_0) = "Have you had trouble sleeping?"
+# label(data$a12_0) = "Have you felt weak?"
+# label(data$a13_0) = "Have you lacked appetite?"
+# label(data$a14_0) = "Have you felt nauseated?"
+# label(data$a15_0) = "Have you vomited?"
+# label(data$a16_0) = "Have you been constipated?"
+# label(data$a17_0) = "Have you had diarrhoea?"
+# label(data$a18_0) = "Were you tired?"
+# label(data$a19_0) = "Did pain interfere with your daily activities?"
+# label(data$a20_0) = "Have you had difficulty in concentrating on things, like reading a newspaper or watching television?"
+# label(data$a21_0) = "Did you feel tense?"
+# label(data$a22_0) = "Did you worry?"
+# label(data$a23_0) = "Did you feel irritable?"
+# label(data$a24_0) = "Did you feel depressed?"
+# label(data$a25_0) = "Have you had difficulty remembering things?"
+# label(data$a26_0) = "Has your physical condition or medical treatment interfered with your family life?"
+# label(data$a27_0) = "Has your physical condition or medical treatment interfered with your social activities?"
+# label(data$a28_0) = "Has your physical condition or medical treatment caused you financial difficulties?"
+# label(data$a29_0) = "How would you rate your overall health during the past week?"
+# label(data$a30_0) = "How would you rate your overall quality of life during the past week?"
+# label(data$a1_fu_1) = "Do you have any trouble doing strenuous activities, like carrying a heavy shopping bag or a suitcase?"
+# label(data$a2_fu_1) = "Do you have any trouble taking a long walk?"
+# label(data$a3_fu_1) = "Do you have any trouble taking a short walk outside of the house?"
+# label(data$a4_fu_1) = "Do you need to stay in bed or a chair during the day?"
+# label(data$a5_fu_1) = "Do you need help with eating, dressing, washing yourself or using the toilet?"
+# label(data$a6_fu_1) = "Were you limited in doing either your work or other daily activities?"
+# label(data$a7_fu_1) = "Were you limited in pursuing your hobbies or other leisure time activities?"
+# label(data$a8_fu_1) = "Were you short of breath?"
+# label(data$a9_fu_1) = "Have you had pain?"
+# label(data$a10_fu_1) = "Did you need to rest?"
+# label(data$a11_fu_1) = "Have you had trouble sleeping?"
+# label(data$a12_fu_1) = "Have you felt weak?"
+# label(data$a13_fu_1) = "Have you lacked appetite?"
+# label(data$a14_fu_1) = "Have you felt nauseated?"
+# label(data$a15_fu_1) = "Have you vomited?"
+# label(data$a16_fu_1) = "Have you been constipated?"
+# label(data$a17_fu_1) = "Have you had diarrhoea?"
+# label(data$a18_fu_1) = "Were you tired?"
+# label(data$a19_fu_1) = "Did pain interfere with your daily activities?"
+# label(data$a20_fu_1) = "Have you had difficulty in concentrating on things, like reading a newspaper or watching television?"
+# label(data$a21_fu_1) = "Did you feel tense?"
+# label(data$a22_fu_1) = "Did you worry?"
+# label(data$a23_fu_1) = "Did you feel irritable?"
+# label(data$a24_fu_1) = "Did you feel depressed?"
+# label(data$a25_fu_1) = "Have you had difficulty remembering things?"
+# label(data$a26_fu_1) = "Has your physical condition or medical treatment interfered with your family life?"
+# label(data$a27_fu_1) = "Has your physical condition or medical treatment interfered with your social activities?"
+# label(data$a28_fu_1) = "Has your physical condition or medical treatment caused you financial difficulties?"
+# label(data$a29_fu_1) = "How would you rate your overall health during the past week?"
+# label(data$a30_fu_1) = "How would you rate your overall quality of life during the past week?"
+# label(data$a1_fu_3) = "Do you have any trouble doing strenuous activities, like carrying a heavy shopping bag or a suitcase?"
+# label(data$a2_fu_3) = "Do you have any trouble taking a long walk?"
+# label(data$a3_fu_3) = "Do you have any trouble taking a short walk outside of the house?"
+# label(data$a4_fu_3) = "Do you need to stay in bed or a chair during the day?"
+# label(data$a5_fu_3) = "Do you need help with eating, dressing, washing yourself or using the toilet?"
+# label(data$a6_fu_3) = "Were you limited in doing either your work or other daily activities?"
+# label(data$a7_fu_3) = "Were you limited in pursuing your hobbies or other leisure time activities?"
+# label(data$a8_fu_3) = "Were you short of breath?"
+# label(data$a9_fu_3) = "Have you had pain?"
+# label(data$a10_fu_3) = "Did you need to rest?"
+# label(data$a11_fu_3) = "Have you had trouble sleeping?"
+# label(data$a12_fu_3) = "Have you felt weak?"
+# label(data$a13_fu_3) = "Have you lacked appetite?"
+# label(data$a14_fu_3) = "Have you felt nauseated?"
+# label(data$a15_fu_3) = "Have you vomited?"
+# label(data$a16_fu_3) = "Have you been constipated?"
+# label(data$a17_fu_3) = "Have you had diarrhoea?"
+# label(data$a18_fu_3) = "Were you tired?"
+# label(data$a19_fu_3) = "Did pain interfere with your daily activities?"
+# label(data$a20_fu_3) = "Have you had difficulty in concentrating on things, like reading a newspaper or watching television?"
+# label(data$a21_fu_3) = "Did you feel tense?"
+# label(data$a22_fu_3) = "Did you worry?"
+# label(data$a23_fu_3) = "Did you feel irritable?"
+# label(data$a24_fu_3) = "Did you feel depressed?"
+# label(data$a25_fu_3) = "Have you had difficulty remembering things?"
+# label(data$a26_fu_3) = "Has your physical condition or medical treatment interfered with your family life?"
+# label(data$a27_fu_3) = "Has your physical condition or medical treatment interfered with your social activities?"
+# label(data$a28_fu_3) = "Has your physical condition or medical treatment caused you financial difficulties?"
+# label(data$a29_fu_3) = "How would you rate your overall health during the past week?"
+# label(data$a30_fu_3) = "How would you rate your overall quality of life during the past week?"
+# label(data$a1_fu_3alt) = "Do you have any trouble doing strenuous activities, like carrying a heavy shopping bag or a suitcase?"
+# label(data$a2_fu_3alt) = "Do you have any trouble taking a long walk?"
+# label(data$a3_fu_3alt) = "Do you have any trouble taking a short walk outside of the house?"
+# label(data$a4_fu_3alt) = "Do you need to stay in bed or a chair during the day?"
+# label(data$a5_fu_3alt) = "Do you need help with eating, dressing, washing yourself or using the toilet?"
+# label(data$a6_fu_3alt) = "Were you limited in doing either your work or other daily activities?"
+# label(data$a7_fu_3alt) = "Were you limited in pursuing your hobbies or other leisure time activities?"
+# label(data$a8_fu_3alt) = "Were you short of breath?"
+# label(data$a9_fu_3alt) = "Have you had pain?"
+# label(data$a10_fu_3alt) = "Did you need to rest?"
+# label(data$a11_fu_3alt) = "Have you had trouble sleeping?"
+# label(data$a12_fu_3alt) = "Have you felt weak?"
+# label(data$a13_fu_3alt) = "Have you lacked appetite?"
+# label(data$a14_fu_3alt) = "Have you felt nauseated?"
+# label(data$a15_fu_3alt) = "Have you vomited?"
+# label(data$a16_fu_3alt) = "Have you been constipated?"
+# label(data$a17_fu_3alt) = "Have you had diarrhoea?"
+# label(data$a18_fu_3alt) = "Were you tired?"
+# label(data$a19_fu_3alt) = "Did pain interfere with your daily activities?"
+# label(data$a20_fu_3alt) = "Have you had difficulty in concentrating on things, like reading a newspaper or watching television?"
+# label(data$a21_fu_3alt) = "Did you feel tense?"
+# label(data$a22_fu_3alt) = "Did you worry?"
+# label(data$a23_fu_3alt) = "Did you feel irritable?"
+# label(data$a24_fu_3alt) = "Did you feel depressed?"
+# label(data$a25_fu_3alt) = "Have you had difficulty remembering things?"
+# label(data$a26_fu_3alt) = "Has your physical condition or medical treatment interfered with your family life?"
+# label(data$a27_fu_3alt) = "Has your physical condition or medical treatment interfered with your social activities?"
+# label(data$a28_fu_3alt) = "Has your physical condition or medical treatment caused you financial difficulties?"
+# label(data$a29_fu_3alt) = "How would you rate your overall health during the past week?"
+# label(data$a30_fu_3alt) = "How would you rate your overall quality of life during the past week?"
+# label(data$qor1_0) = "Able to breathe easily"
+# label(data$qor2_0) = "Been able to enjoy food"
+# label(data$qor3_0) = "Feeling rested"
+# label(data$qor4_0) = "Have had a good sleep"
+# label(data$qor5_0) = "Able to look after personal toilet and hygiene unaided"
+# label(data$qor6_0) = "Able to communicate with family or friends"
+# label(data$qor7_0) = "Getting support from hospital doctors and nurses"
+# label(data$qor8_0) = "Able to return to work or usual home activities"
+# label(data$qor9_0) = "Feeling comfortable and in control"
+# label(data$qor10_0) = "Having a feeling of general wellbeing"
+# label(data$qor_11_0) = "Moderate pain"
+# label(data$qor_12_0) = "Severe pain"
+# label(data$qor_13_0) = "Nausea or vomiting"
+# label(data$qor_14_0) = "Feeling worried or anxious"
+# label(data$qor_15_0) = "Feeling sad or depressed"
+# label(data$qor1_hosp) = "Able to breathe easily"
+# label(data$qor2_hosp) = "Been able to enjoy food"
+# label(data$qor3_hosp) = "Feeling rested"
+# label(data$qor4_hosp) = "Have had a good sleep"
+# label(data$qor5_hosp) = "Able to look after personal toilet and hygiene unaided"
+# label(data$qor6_hosp) = "Able to communicate with family or friends"
+# label(data$qor7_hosp) = "Getting support from hospital doctors and nurses"
+# label(data$qor8_hosp) = "Able to return to work or usual home activities"
+# label(data$qor9_hosp) = "Feeling comfortable and in control"
+# label(data$qor10_hosp) = "Having a feeling of general wellbeing"
+# label(data$qor_11_hosp) = "Moderate pain"
+# label(data$qor_12_hosp) = "Severe pain"
+# label(data$qor_13_hosp) = "Nausea or vomiting"
+# label(data$qor_14_hosp) = "Feeling worried or anxious"
+# label(data$qor_15_hosp) = "Feeling sad or depressed"
+# label(data$qor1_1m) = "Able to breathe easily"
+# label(data$qor2_1m) = "Been able to enjoy food"
+# label(data$qor3_1m) = "Feeling rested"
+# label(data$qor4_1m) = "Have had a good sleep"
+# label(data$qor5_1m) = "Able to look after personal toilet and hygiene unaided"
+# label(data$qor6_1m) = "Able to communicate with family or friends"
+# label(data$qor7_1m) = "Getting support from hospital doctors and nurses"
+# label(data$qor8_1m) = "Able to return to work or usual home activities"
+# label(data$qor9_1m) = "Feeling comfortable and in control"
+# label(data$qor10_1m) = "Having a feeling of general wellbeing"
+# label(data$qor_11_1m) = "Moderate pain"
+# label(data$qor_12_1m) = "Severe pain"
+# label(data$qor_13_1m) = "Nausea or vomiting"
+# label(data$qor_14_1m) = "Feeling worried or anxious"
+# label(data$qor_15_1m) = "Feeling sad or depressed"
+# label(data$qor1_3m) = "Able to breathe easily"
+# label(data$qor2_3m) = "Been able to enjoy food"
+# label(data$qor3_3m) = "Feeling rested"
+# label(data$qor4_3m) = "Have had a good sleep"
+# label(data$qor5_3m) = "Able to look after personal toilet and hygiene unaided"
+# label(data$qor6_3m) = "Able to communicate with family or friends"
+# label(data$qor7_3m) = "Getting support from hospital doctors and nurses"
+# label(data$qor8_3m) = "Able to return to work or usual home activities"
+# label(data$qor9_3m) = "Feeling comfortable and in control"
+# label(data$qor10_3m) = "Having a feeling of general wellbeing"
+# label(data$qor_11_3m) = "Moderate pain"
+# label(data$qor_12_3m) = "Severe pain"
+# label(data$qor_13_3m) = "Nausea or vomiting"
+# label(data$qor_14_3m) = "Feeling worried or anxious"
+# label(data$qor_15_3m) = "Feeling sad or depressed"
+# label(data$qor1_3m_alt) = "Able to breathe easily"
+# label(data$qor2_3m_alt) = "Been able to enjoy food"
+# label(data$qor3_3m_alt) = "Feeling rested"
+# label(data$qor4_3m_alt) = "Have had a good sleep"
+# label(data$qor5_3m_alt) = "Able to look after personal toilet and hygiene unaided"
+# label(data$qor6_3m_alt) = "Able to communicate with family or friends"
+# label(data$qor7_3m_alt) = "Getting support from hospital doctors and nurses"
+# label(data$qor8_3m_alt) = "Able to return to work or usual home activities"
+# label(data$qor9_3m_alt) = "Feeling comfortable and in control"
+# label(data$qor10_3m_alt) = "Having a feeling of general wellbeing"
+# label(data$qor_11_3m_alt) = "Moderate pain"
+# label(data$qor_12_3m_alt) = "Severe pain"
+# label(data$qor_13_3m_alt) = "Nausea or vomiting"
+# label(data$qor_14_3m_alt) = "Feeling worried or anxious"
+# label(data$qor_15_3m_alt) = "Feeling sad or depressed"
+# #Setting Units
+
+
+#Setting Factors(will create new variable for factors)
+mapping_redcap_data_access_group = c(
+	"cmn" = "CMN",
+	"jhh" = "JHH",
+	"nph" = "NPH",
+	"tmh" = "TMH"
+)
+data$redcap_data_access_group.factor = factor(data$redcap_data_access_group, levels = names(mapping_redcap_data_access_group), labels = mapping_redcap_data_access_group)
+
+mapping_per_protocol = c(
+	"1" = "Yes",
+	"0" = "No"
+)
+data$per_protocol.factor = factor(data$per_protocol, levels = names(mapping_per_protocol), labels = mapping_per_protocol)
+
+mapping_master_do_not_impute = c(
+	"1" = "Do not impute missing data"
+)
+data$master_do_not_impute.factor = factor(data$master_do_not_impute, levels = names(mapping_master_do_not_impute), labels = mapping_master_do_not_impute)
+
+mapping_master_gender = c(
+	"0" = "Male",
+	"1" = "Female",
+	"96" = "Other"
+)
+data$master_gender.factor = factor(data$master_gender, levels = names(mapping_master_gender), labels = mapping_master_gender)
+
+mapping_master_country_of_birth = c(
+	"1" = "Australia",
+	"0" = "Other than Australia",
+	"98" = "Missing"
+)
+data$master_country_of_birth.factor = factor(data$master_country_of_birth, levels = names(mapping_master_country_of_birth), labels = mapping_master_country_of_birth)
+
+mapping_master_first_nations = c(
+	"1" = "Yes",
+	"0" = "No",
+	"98" = "Missing"
+)
+data$master_first_nations.factor = factor(data$master_first_nations, levels = names(mapping_master_first_nations), labels = mapping_master_first_nations)
+
+mapping_master_language_home = c(
+	"1" = "English",
+	"0" = "Not english",
+	"98" = "Missing"
+)
+data$master_language_home.factor = factor(data$master_language_home, levels = names(mapping_master_language_home), labels = mapping_master_language_home)
+
+mapping_master_marital_status = c(
+	"1" = "In a relationship",
+	"0" = "Not in a relationship",
+	"98" = "Missing"
+)
+data$master_marital_status.factor = factor(data$master_marital_status, levels = names(mapping_master_marital_status), labels = mapping_master_marital_status)
+
+mapping_master_education = c(
+	"1" = "Year 10 and below",
+	"2" = "Year 12",
+	"3" = "Trade/vocational",
+	"4" = "University",
+	"98" = "Missing"
+)
+data$master_education.factor = factor(data$master_education, levels = names(mapping_master_education), labels = mapping_master_education)
+
+mapping_master_living = c(
+	"0" = "Living alone",
+	"1" = "Living in residential care, e.g., nursing home",
+	"2" = "Living with others (not residential care)",
+	"98" = "Missing"
+)
+data$master_living.factor = factor(data$master_living, levels = names(mapping_master_living), labels = mapping_master_living)
+
+mapping_master_employment = c(
+	"1" = "Paid employment (inc sick leave)",
+	"2" = "Retired and disability pension",
+	"0" = "Not paid employment",
+	"98" = "Missing"
+)
+data$master_employment.factor = factor(data$master_employment, levels = names(mapping_master_employment), labels = mapping_master_employment)
+
+mapping_master_asa = c(
+	"1" = "ASA I",
+	"2" = "ASA II",
+	"3" = "ASA III",
+	"4" = "ASA IV",
+	"5" = "ASA V",
+	"98" = "Missing"
+)
+data$master_asa.factor = factor(data$master_asa, levels = names(mapping_master_asa), labels = mapping_master_asa)
+
+mapping_master_remoteness = c(
+	"1" = "Same as JHH, e.g., Major cities of Australia",
+	"0" = "Not same as JHH",
+	"98" = "Missing"
+)
+data$master_remoteness.factor = factor(data$master_remoteness, levels = names(mapping_master_remoteness), labels = mapping_master_remoteness)
+
+mapping_master_internet_time = c(
+	"1" = "Daily",
+	"0" = "Less often than daily",
+	"98" = "Missing"
+)
+data$master_internet_time.factor = factor(data$master_internet_time, levels = names(mapping_master_internet_time), labels = mapping_master_internet_time)
+
+mapping_master_major_surgery = c(
+	"1" = "Yes",
+	"0" = "No",
+	"98" = "Missing"
+)
+data$master_major_surgery.factor = factor(data$master_major_surgery, levels = names(mapping_master_major_surgery), labels = mapping_master_major_surgery)
+
+mapping_master_priv_health = c(
+	"1" = "Yes",
+	"0" = "No",
+	"98" = "Missing"
+)
+data$master_priv_health.factor = factor(data$master_priv_health, levels = names(mapping_master_priv_health), labels = mapping_master_priv_health)
+
+mapping_master_site = c(
+	"1" = "Public",
+	"2" = "Private"
+)
+data$master_site.factor = factor(data$master_site, levels = names(mapping_master_site), labels = mapping_master_site)
+
+mapping_master_stoma = c(
+	"1" = "Yes",
+	"0" = "No",
+	"98" = "Missing"
+)
+data$master_stoma.factor = factor(data$master_stoma, levels = names(mapping_master_stoma), labels = mapping_master_stoma)
+
+mapping_master_surgery_type = c(
+	"1" = "Open",
+	"0" = "Minimally invasive (laparoscopic)",
+	"96" = "Other",
+	"98" = "Missing"
+)
+data$master_surgery_type.factor = factor(data$master_surgery_type, levels = names(mapping_master_surgery_type), labels = mapping_master_surgery_type)
+
+mapping_master_surgical_site = c(
+	"1" = "Bowel",
+	"0" = "Rectal",
+	"96" = "Other",
+	"98" = "Missing"
+)
+data$master_surgical_site.factor = factor(data$master_surgical_site, levels = names(mapping_master_surgical_site), labels = mapping_master_surgical_site)
+
+mapping_master_surgeon = c(
+	"1" = "Surgeon 1",
+	"2" = "Surgeon 2",
+	"3" = "Surgeon 3",
+	"4" = "Surgeon 4",
+	"5" = "Surgeon  5",
+	"6" = "Surgeon 6",
+	"7" = "Surgeon 7",
+	"8" = "Surgeon 8",
+	"9" = "Surgeon 9",
+	"96" = "Other surgeon",
+	"98" = "Missing"
+)
+data$master_surgeon.factor = factor(data$master_surgeon, levels = names(mapping_master_surgeon), labels = mapping_master_surgeon)
+
+```
+
+```{r}
+saveRDS(data,here("Data","p2_bowel_init.RDS"))
+```

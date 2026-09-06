@@ -1,0 +1,462 @@
+---
+title: "Data management for bowel cancer study"
+output: html_document
+date: "2025-10-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#to make the renv intially
+#renv::init()
+
+#renv friendly loading of packages.
+#dont use pacman for this as it may overwrite the version of the package used in renv
+required_packages <- c("tidyverse", "here", "renv","Hmisc","mice")
+
+missing <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
+if (length(missing) > 0) {
+  stop("Missing packages: ", paste(missing, collapse = ", "), 
+       ". Please run renv::restore() to install them.")
+}
+#if a package isnt installed in renv::restore(), do this: 
+#renv::install("tidyverse")
+
+library(renv)
+library(tidyverse)
+library(here)
+library(Hmisc)
+library(mice)
+
+```
+
+# Analysis phase 1
+
+## Read in the initial dataset
+```{r}
+bowel_init <- readRDS(here("Data","bowel_init.RDS"))
+#dropping master_ prefix
+colnames(bowel_init) <- gsub("master_", "", colnames(bowel_init))
+```
+
+## General cleaning
+```{r}
+bowel <- bowel_init %>%
+         #Continuous walking for at least 10 minutes 
+  mutate(walk_10 = case_when(walk_mins_hosp >= 10 ~ 1,
+                             walk_mins_hosp <  10 ~ 0),
+         qor_tot = qor1_hosp+qor2_hosp+qor3_hosp+qor4_hosp+qor5_hosp+qor6_hosp+
+                qor7_hosp+qor8_hosp+qor9_hosp+qor10_hosp+qor_11_hosp+qor_12_hosp+
+                qor_13_hosp+qor_14_hosp+qor_15_hosp,
+         los = as.numeric(difftime(as.Date(actual_discharge_date,format="%Y-%m-%d"),
+                                   as.Date(actual_surgery_date,format="%Y-%m-%d")))) %>%
+  mutate(across(where(is.factor), fct_drop)) %>%
+  mutate(across(where(is.factor), ~{x <- .
+                                  x[x == "Missing"] <- NA
+                                  droplevels(x)})) %>%
+  mutate(meals_hosp.factor = factor(meals_hosp.factor,ordered=TRUE),
+         meals_bin = case_when(meals_hosp.factor %in% c("3 or more") ~ 1,
+                               meals_hosp.factor %in% c("2","1","0") ~ 0),
+         snacks_hosp.factor = factor(snacks_hosp.factor,ordered=TRUE),
+         snacks_bin = case_when(snacks_hosp.factor %in% c("2","1") ~ 1,
+                                snacks_hosp.factor %in% c("0") ~ 0),
+         liquid_hosp.factor = factor(liquid_hosp.factor,ordered=TRUE),
+         fluid_bin = case_when(liquid_hosp.factor %in% c("5 or more cups","4 cups") ~ 1,
+                               liquid_hosp.factor %in% c("3 cups","1 - 2 cups","None") ~ 0),
+         breath_hosp.factor = factor(breath_hosp.factor,ordered=TRUE),
+         breath_bin = case_when(breath_hosp.factor %in% c("Every hour","Every 2-3 hours","Every 4-5 hours") ~ 1,
+                                breath_hosp.factor %in% c("Once or twice","Not at all") ~ 0),
+         able_improve_hosp.factor = factor(able_improve_hosp.factor,ordered=TRUE),
+         able_bin = case_when(able_improve_hosp.factor %in% c("Strongly agree","Agree") ~ 1,
+                              able_improve_hosp.factor %in% c("Neither agree nor disagree") ~ 0),
+         understand_improve_hosp.factor = factor(understand_improve_hosp.factor,ordered=TRUE),
+         understand_bin = case_when(understand_improve_hosp.factor %in% c("Strongly agree","Agree") ~ 1,
+                                    understand_improve_hosp.factor %in% c("Neither agree nor disagree") ~ 0),
+         grp = factor(case_when(group_allocation == "1" ~ "A",
+                                group_allocation == "2" ~ "B")),
+         meals = case_when(meals_hosp.factor == "0" ~ 0,
+                           meals_hosp.factor == "1" ~ 1,
+                           meals_hosp.factor == "2" ~ 2,
+                           meals_hosp.factor == "3 or more" ~ 3),
+         snacks = case_when(snacks_hosp.factor == "0" ~ 0,
+                            snacks_hosp.factor == "1" ~ 1,
+                            snacks_hosp.factor == "2" ~ 2))
+```
+
+
+## Saving the analysis ready bowel dataset
+```{r}
+saveRDS(bowel,here("Data","bowel.RDS"))
+```
+
+
+## Impute missing
+```{r}
+#select the data to be used, dont repeat the factor and non-factor version of the same var
+bowel_miss <- bowel %>%
+  dplyr::select(grp,redcap_data_access_group,gender.factor,age,
+                country_of_birth.factor,first_nations.factor,language_home.factor,
+                marital_status.factor,education.factor,living.factor,employment.factor,
+                asa.factor,remoteness.factor,internet_time.factor,major_surgery.factor,
+                priv_health.factor,site.factor,stoma.factor,surgery_type.factor,
+                surgical_site.factor,pt_device_hosp.factor,walk_hosp_mins_total,
+                fluid_bin,breath_bin,bed_hosp_mins_total,
+                able_bin,understand_bin,qor_tot,los,meals,snacks)
+
+
+#run with the initial quickpred
+imp <- mice(bowel_miss, m = 20, print = FALSE,method="pmm",maxit=50,seed=930320491,
+            pred=quickpred(bowel_miss,include=c("grp"),
+                           minpuc = 0.2,mincor=0.4,method="spearman"))
+densityplot(imp)
+plot(imp)
+# #remove some predictors from the matrix if theyre causing issues
+# predmat <- imp[["predictorMatrix"]]
+# predmat["meals","education.factor"] <- 0
+# predmat["meals","employment.factor"] <- 0
+# #rerun imp with updated predictor matrix
+# imp <- mice(bowel_miss, m = 20, print = FALSE,method="pmm",maxit=50,seed=930320491,
+#             predictorMatrix=predmat)
+
+bowel_imp <- complete(imp,action="long") %>%
+  mutate(grp = ifelse(grp == "A","Treatment","Control"),
+         device = case_when(pt_device_hosp.factor == "Yes" ~ 1,
+                            pt_device_hosp.factor == "No" ~ 0))
+saveRDS(bowel_imp,here("Data","bowel_imp_long.RDS"))
+bowel_imp <- split(x=bowel_imp,f=bowel_imp$.imp)
+saveRDS(bowel_imp,here("Data","bowel_imp.RDS"))
+```
+
+# Analysis phase 2
+
+## Read in the data
+
+```{r}
+bo_p2_init <- readRDS(here("Data","p2_bowel_init.RDS"))
+#dropping master_ prefix
+colnames(bo_p2_init) <- gsub("master_", "", colnames(bo_p2_init))
+```
+
+## Data cleaning
+
+```{r}
+bo_p2 <- bo_p2_init %>%
+    mutate(across(where(is.factor), fct_drop)) %>%
+    mutate(across(where(is.factor), ~{x <- .
+                                  x[x == "Missing"] <- NA
+                                  droplevels(x)})) %>%
+  #put did not recieve or missing as actually NA
+  mutate(cost_1mo = as.numeric(ifelse(grepl("missing|did not receive",cost_1mo),NA,cost_1mo)),
+         cost_2mo = as.numeric(ifelse(grepl("missing|did not receive",cost_2mo),NA,cost_2mo)),
+         cost_3mo = as.numeric(ifelse(grepl("missing|did not receive",cost_3mo),NA,cost_3mo)),
+         cost_3mo = case_when(is.na(cost_3mo) ~ cost_1mo + cost_2mo,
+                              !is.na(cost_3mo) ~ cost_3mo),
+         num_ed_1mo = as.numeric(ifelse(grepl("missing|did not receive",num_ed_1mo),NA,num_ed_1mo)),
+         num_ed_2mo = as.numeric(ifelse(grepl("missing|did not receive",num_ed_2mo),NA,num_ed_2mo)),
+         num_ed_3mo = as.numeric(ifelse(grepl("missing|did not receive",num_ed_3mo),NA,num_ed_3mo)),
+         num_ed_3mo = case_when(is.na(num_ed_3mo) ~ num_ed_1mo + num_ed_2mo,
+                              !is.na(num_ed_3mo) ~ num_ed_3mo),
+         #calculate the quality of recovery
+         qor_base = qor1_0+qor2_0+qor3_0+qor4_0+qor5_0+qor6_0+qor7_0+qor8_0+
+                  qor9_0+qor10_0+qor_11_0+qor_12_0+qor_13_0+qor_14_0+qor_15_0,
+         qor_hosp = qor1_hosp+qor2_hosp+qor3_hosp+qor4_hosp+qor5_hosp+qor6_hosp+qor7_hosp+qor8_hosp+
+                  qor9_hosp+qor10_hosp+qor_11_hosp+qor_12_hosp+qor_13_hosp+qor_14_hosp+qor_15_hosp,
+         qor_1m = qor1_1m+qor2_1m+qor3_1m+qor4_1m+qor5_1m+qor6_1m+qor7_1m+qor8_1m+
+                  qor9_1m+qor10_1m+qor_11_1m+qor_12_1m+qor_13_1m+qor_14_1m+qor_15_1m,
+         qor_3m = qor1_3m+qor2_3m+qor3_3m+qor4_3m+qor5_3m+qor6_3m+qor7_3m+qor8_3m+
+                  qor9_3m+qor10_3m+qor_11_3m+qor_12_3m+qor_13_3m+qor_14_3m+qor_15_3m,
+         group_allocation = factor(group_allocation))
+#replace in the alternative survey answers if theyre missing the normal version
+for(i in 1:30){
+  col_name <- paste0("a", i, "_fu_3")
+  col_name_alt <- paste0("a", i, "_fu_3alt")
+  
+  bo_p2[[col_name]] <- ifelse(is.na(bo_p2[[col_name]]),
+                                   bo_p2[[col_name_alt]],
+                                   bo_p2[[col_name]])
+}
+
+bo_p2 <- bo_p2 %>%
+  dplyr::select(-qor1_3m_alt,-qor2_3m_alt,-qor3_3m_alt,-qor4_3m_alt,-qor5_3m_alt,
+                -qor6_3m_alt,-qor7_3m_alt,-qor8_3m_alt,-qor9_3m_alt,-qor10_3m_alt,
+                -qor_11_3m_alt,-qor_12_3m_alt,-qor_13_3m_alt,-qor_14_3m_alt,-qor_15_3m_alt,
+                -a1_fu_3alt,-a2_fu_3alt,-a3_fu_3alt,-a4_fu_3alt,-a5_fu_3alt,
+                -a6_fu_3alt,-a7_fu_3alt,-a8_fu_3alt,-a9_fu_3alt,-a10_fu_3alt,
+                -a11_fu_3alt,-a12_fu_3alt,-a13_fu_3alt,-a14_fu_3alt,-a15_fu_3alt,
+                -a16_fu_3alt,-a17_fu_3alt,-a18_fu_3alt,-a19_fu_3alt,-a20_fu_3alt,
+                -a21_fu_3alt,-a22_fu_3alt,-a23_fu_3alt,-a24_fu_3alt,-a25_fu_3alt,
+                -a26_fu_3alt,-a27_fu_3alt,-a28_fu_3alt,-a29_fu_3alt,-a30_fu_3alt,
+                -gender,-country_of_birth,-first_nations,-language_home,
+                -marital_status,-education,-living,-employment,-asa,-remoteness,
+                -internet_time,-major_surgery,-priv_health,-site,-stoma,-surgery_type,
+                -surgical_site,-surgeon,-surgeon.factor,-do_not_impute.factor,
+                -do_not_impute,-num_nights_admitted_1mo,-num_nights_admitted_2,
+                -num_nights_admitted_3mo,-redcap_data_access_group)
+```
+
+## Imputation second dataset
+
+```{r}
+#some variables with only 1 response type
+bo_p2imp <- bo_p2 %>%
+  mutate(a5_0 = 1,
+         a15_0 = 1)
+
+#run with the initial quickpred
+imp <- mice(bo_p2imp, m = 1, print = FALSE,method="pmm",maxit=50,seed=930320491,
+            pred=quickpred(bo_p2imp,include=c("group_allocation"),
+                           exclude=c("record_id","per_protocol",
+                                     "per_protocol.factor",
+                                     "first_nations.factor"),
+                           minpuc = 0.4,mincor=0.5,method="spearman"))
+
+test <- imp[["loggedEvents"]]
+predmat <- imp[["predictorMatrix"]]
+#update the predictor matrix to get rid of unstable relationships
+predmat["qor_11_3m","education.factor"] <- 0
+predmat["qor_12_3m","education.factor"] <- 0
+predmat["qor2_hosp","employment.factor"] <- 0
+
+
+#add in the other times of that variable to predict matrix
+for (i in 1:30) {
+  predmat[paste0("a", i, "_0"), paste0("a", i, "_fu_1")] <- 1
+  predmat[paste0("a", i, "_0"), paste0("a", i, "_fu_3")] <- 1
+  predmat[paste0("a", i, "_fu_1"), paste0("a", i, "_0")] <- 1
+  predmat[paste0("a", i, "_fu_1"), paste0("a", i, "_fu_3")] <- 1
+  predmat[paste0("a", i, "_fu_3"), paste0("a", i, "_0")] <- 1
+  predmat[paste0("a", i, "_fu_3"), paste0("a", i, "_fu_1")] <- 1
+}
+#add in the other times of that variable to predict matrix
+for (i in 1:10) {
+  predmat[paste0("qor", i, "_0"), paste0("qor", i, "_1m")] <- 1
+  predmat[paste0("qor", i, "_0"), paste0("qor", i, "_3m")] <- 1
+  predmat[paste0("qor", i, "_0"), paste0("qor", i, "_hosp")] <- 1
+  predmat[paste0("qor", i, "_1m"), paste0("qor", i, "_0")] <- 1
+  predmat[paste0("qor", i, "_1m"), paste0("qor", i, "_3m")] <- 1
+  predmat[paste0("qor", i, "_1m"), paste0("qor", i, "_hosp")] <- 1
+  predmat[paste0("qor", i, "_3m"), paste0("qor", i, "_0")] <- 1
+  predmat[paste0("qor", i, "_3m"), paste0("qor", i, "_1m")] <- 1
+  predmat[paste0("qor", i, "_3m"), paste0("qor", i, "_hosp")] <- 1
+  predmat[paste0("qor", i, "_hosp"), paste0("qor", i, "_0")] <- 1
+  predmat[paste0("qor", i, "_hosp"), paste0("qor", i, "_1m")] <- 1
+  predmat[paste0("qor", i, "_hosp"), paste0("qor", i, "_3m")] <- 1
+}
+#add in the other times of that variable to predict matrix
+for (i in 11:15) {
+  predmat[paste0("qor_", i, "_0"), paste0("qor_", i, "_1m")] <- 1
+  predmat[paste0("qor_", i, "_0"), paste0("qor_", i, "_3m")] <- 1
+  predmat[paste0("qor_", i, "_0"), paste0("qor_", i, "_hosp")] <- 1
+  predmat[paste0("qor_", i, "_1m"), paste0("qor_", i, "_0")] <- 1
+  predmat[paste0("qor_", i, "_1m"), paste0("qor_", i, "_3m")] <- 1
+  predmat[paste0("qor_", i, "_1m"), paste0("qor_", i, "_hosp")] <- 1
+  predmat[paste0("qor_", i, "_3m"), paste0("qor_", i, "_0")] <- 1
+  predmat[paste0("qor_", i, "_3m"), paste0("qor_", i, "_1m")] <- 1
+  predmat[paste0("qor_", i, "_3m"), paste0("qor_", i, "_hosp")] <- 1
+  predmat[paste0("qor_", i, "_hosp"), paste0("qor_", i, "_0")] <- 1
+  predmat[paste0("qor_", i, "_hosp"), paste0("qor_", i, "_1m")] <- 1
+  predmat[paste0("qor_", i, "_hosp"), paste0("qor_", i, "_3m")] <- 1
+}
+#qor6_0 is still collinear, just including trt and forcing it to still be imputed
+predmat["qor6_0",] <- 0
+predmat["qor6_0","group_allocation"] <- 1
+#run with the initial quickpred
+imp <- mice(bo_p2imp, m = 20, print = FALSE,method="pmm",maxit=50,seed=930320491,
+            pred=predmat,remove.collinear = FALSE)
+test <- imp[["loggedEvents"]]
+
+p2_bo_long <- complete(imp,action="long")
+```
+
+## Non imputed data
+
+```{r}
+
+#pivot some variables to longer
+bo_p2_2 <- bo_p2 %>%
+  rename(daoh_1 = daoh_30_days,
+         daoh_3 = daoh_90_days,
+         qor_0 = qor_base,
+         qor_1 = qor_1m,
+         qor_3 = qor_3m,
+         numed_1 = num_ed_1mo,
+         numed_3 = num_ed_3mo,
+         cost_3 = cost_3mo,
+         numadmissions_1 = num_admissions_1mo) %>%
+  pivot_longer(cols=c(daoh_1,daoh_3,qor_0,qor_hosp,qor_1,qor_3,numed_1,numed_3,cost_3,numadmissions_1),
+               names_to = c(".value","time"),
+               names_sep = "_",
+               values_to = "value") %>%
+  dplyr::select(-a1_0:-qor_15_3m,-num_ed_2mo,-cost_1mo,-cost_2mo)
+
+#run the code to calculate QLQ
+bo_p2_qlq <- bo_p2 %>% 
+  dplyr::select(record_id,a1_0:a30_fu_3)
+
+bo_p2_qlq2 <- bo_p2_qlq %>%
+    pivot_longer(cols = c(
+             a1_0:a30_0,
+             a1_fu_1:a30_fu_1,
+             a1_fu_3:a30_fu_3),
+    names_to = "var",values_to = "value") %>%
+  mutate(time = sub(".*_", "", var),
+         q = sub("_.*","",var)) %>%
+  pivot_wider(id_cols=c(record_id,time),names_from = q,values_from=value) %>%
+  rowwise() %>% 
+  #Global Health status/QoL
+  mutate(QL2_raw = sum(across(a29:a30))/2) %>% 
+  mutate(QL2 = (QL2_raw - 1)/6*100) %>% 
+  #Functional scales
+  #mutate(PF2_miss = sum(is.na(across(a1:a5)))) %>% 
+  mutate(PF2_raw = sum(across(a1:a5))/sum(!is.na(across(a1:a5)))) %>% 
+  mutate(PF2 = (1-(PF2_raw-1)/3)*100) %>% 
+  mutate(RF2_raw = sum(across(a6:a7))/2) %>% 
+  mutate(RF2 = (1-(RF2_raw-1)/3)*100) %>% 
+  #mutate(EF_miss = sum(is.na(across(a21:a24)))) %>%
+  mutate(EF_raw = sum(across(a21:a24))/sum(!is.na(across(a21:a24)))) %>% 
+  mutate(EF = (1-(EF_raw-1)/3)*100) %>% 
+  mutate(CF_raw = sum(across(c(a20, a25)))/2) %>% 
+  mutate(CF = (1-(CF_raw-1)/3)*100) %>% 
+  mutate(SF_raw = sum(across(c(a26, a27)))/2) %>% 
+  mutate(SF = (1-(SF_raw-1)/3)*100) %>% 
+  #Symptom scales
+  #mutate(FA_miss = sum(is.na(across(c(a10, a12, a18))))) %>% 
+  mutate(FA_raw = sum(across(c(a10, a12, a18)))/sum(!is.na(across(c(a10, a12, a18))))) %>% 
+  mutate(FA = (FA_raw - 1)/3*100) %>% 
+  mutate(FA_rev =(1-(FA_raw - 1)/3)*100) %>% 
+  mutate(NV_raw = sum(across(c(a14,a15))/2)) %>% 
+  mutate(NV = (NV_raw - 1)/3*100) %>% 
+  mutate(NV_rev =(1-(NV_raw - 1)/3)*100) %>% 
+  mutate(PA_raw = sum(across(c(a9,a19))/2)) %>% 
+  mutate(PA = (PA_raw - 1)/3*100) %>% 
+  mutate(PA_rev = (1 - (PA_raw - 1)/3)*100) %>%
+  mutate(DY = (a8-1)/3*100) %>% 
+  mutate(DY_rev = (1 - (a8-1)/3)*100) %>% 
+  mutate(SL = (a11-1)/3*100) %>%
+  mutate(SL_rev = (1 - (a11-1)/3)*100) %>%
+  mutate(AP = (a13-1)/3*100) %>%
+  mutate(AP_rev = (1 - (a13-1)/3)*100) %>%
+  mutate(CO = (a16-1)/3*100) %>%
+  mutate(CO_rev = (1-(a16-1)/3)*100) %>%
+  mutate(DI = (a17-1)/3*100) %>%
+  mutate(DI_rev = (1 - (a17-1)/3)*100) %>%
+  mutate(FI = (a28-1)/3*100) %>% 
+  mutate(summary_score = sum(across(c(PF2, RF2, EF, CF, SF,
+                                    FA_rev, NV_rev, PA_rev, DY_rev, SL_rev, AP_rev, CO_rev, DI_rev)))/13) %>%
+  select(record_id,time,summary_score)
+
+bo_p2_3 <- full_join(bo_p2_2,bo_p2_qlq2,by=c("record_id","time"))
+saveRDS(bo_p2_3,here("Data","bo_p2.RDS"))
+```
+
+## Post imputation cleaning
+
+```{r}
+p2_bo_long2 <- p2_bo_long %>%
+  #calculate the quality of recovery scores and the cost
+  mutate(cost_3mo = case_when(is.na(cost_3mo) ~ cost_1mo + cost_2mo,
+                              !is.na(cost_3mo) ~ cost_3mo),
+         qor_base = qor1_0+qor2_0+qor3_0+qor4_0+qor5_0+qor6_0+qor7_0+qor8_0+
+                  qor9_0+qor10_0+qor_11_0+qor_12_0+qor_13_0+qor_14_0+qor_15_0,
+         qor_hosp = qor1_hosp+qor2_hosp+qor3_hosp+qor4_hosp+qor5_hosp+qor6_hosp+qor7_hosp+qor8_hosp+
+                  qor9_hosp+qor10_hosp+qor_11_hosp+qor_12_hosp+qor_13_hosp+qor_14_hosp+qor_15_hosp,
+         qor_1m = qor1_1m+qor2_1m+qor3_1m+qor4_1m+qor5_1m+qor6_1m+qor7_1m+qor8_1m+
+                  qor9_1m+qor10_1m+qor_11_1m+qor_12_1m+qor_13_1m+qor_14_1m+qor_15_1m,
+         qor_3m = qor1_3m+qor2_3m+qor3_3m+qor4_3m+qor5_3m+qor6_3m+qor7_3m+qor8_3m+
+                  qor9_3m+qor10_3m+qor_11_3m+qor_12_3m+qor_13_3m+qor_14_3m+qor_15_3m) %>%
+  #select only the variables we need
+  dplyr::select(record_id,.imp,redcap_data_access_group.factor,group_allocation,
+                per_protocol,age,daoh_30_days,daoh_90_days,cost_3mo,
+                num_ed_1mo,num_ed_2mo,num_ed_3mo,num_admissions_1mo,
+                num_admissions_2,gender.factor,country_of_birth.factor,
+                first_nations.factor,language_home.factor,marital_status.factor,
+                education.factor,living.factor,employment.factor,asa.factor,
+                remoteness.factor,internet_time.factor,major_surgery.factor,
+                priv_health.factor,site.factor,stoma.factor,surgery_type.factor,
+                surgical_site.factor,qor_base,qor_hosp,qor_1m,qor_3m) %>%
+  #pivot some variables to longer
+  rename(daoh_1 = daoh_30_days,
+         daoh_3 = daoh_90_days,
+         qor_0 = qor_base,
+         qor_1 = qor_1m,
+         qor_3 = qor_3m,
+         numed_1 = num_ed_1mo,
+         numed_3 = num_ed_3mo,
+         cost_3 = cost_3mo,
+         numadmissions_1 = num_admissions_1mo) %>%
+  #make the data long format
+  pivot_longer(cols=c(daoh_1,daoh_3,qor_0,qor_hosp,qor_1,qor_3,numed_1,numed_3,cost_3,numadmissions_1),
+               names_to = c(".value","time"),
+               names_sep = "_",
+               values_to = "value")
+
+```
+
+
+## Imputed QLQ scores
+
+```{r}
+p2_bo_long_qlq <- p2_bo_long %>% 
+  dplyr::select(record_id,.imp,a1_0:a30_fu_3)
+
+p2_bo_long_qlq2 <- p2_bo_long_qlq %>%
+    pivot_longer(cols = c(
+             a1_0:a30_0,
+             a1_fu_1:a30_fu_1,
+             a1_fu_3:a30_fu_3),
+    names_to = "var",values_to = "value")%>%
+  mutate(time = sub(".*_", "", var),
+         q = sub("_.*","",var)) %>%
+  pivot_wider(id_cols=c(record_id,time,.imp),names_from = q,values_from=value) %>%
+  rowwise() %>% 
+rowwise() %>% 
+  #Global Health status/QoL
+  mutate(QL2_raw = sum(across(a29:a30))/2) %>% 
+  mutate(QL2 = (QL2_raw - 1)/6*100) %>% 
+  #Functional scales
+  #mutate(PF2_miss = sum(is.na(across(a1:a5)))) %>% 
+  mutate(PF2_raw = sum(across(a1:a5))/sum(!is.na(across(a1:a5)))) %>% 
+  mutate(PF2 = (1-(PF2_raw-1)/3)*100) %>% 
+  mutate(RF2_raw = sum(across(a6:a7))/2) %>% # 
+  mutate(RF2 = (1-(RF2_raw-1)/3)*100) %>% 
+  #mutate(EF_miss = sum(is.na(across(a21:a24)))) %>%
+  mutate(EF_raw = sum(across(a21:a24))/sum(!is.na(across(a21:a24)))) %>% 
+  mutate(EF = (1-(EF_raw-1)/3)*100) %>% 
+  mutate(CF_raw = sum(across(c(a20, a25)))/2) %>% 
+  mutate(CF = (1-(CF_raw-1)/3)*100) %>% 
+  mutate(SF_raw = sum(across(c(a26, a27)))/2) %>% 
+  mutate(SF = (1-(SF_raw-1)/3)*100) %>% 
+  #Symptom scales
+  #mutate(FA_miss = sum(is.na(across(c(a10, a12, a18))))) %>% 
+  mutate(FA_raw = sum(across(c(a10, a12, a18)))/sum(!is.na(across(c(a10, a12, a18))))) %>% 
+  mutate(FA = (FA_raw - 1)/3*100) %>% 
+  mutate(FA_rev =(1-(FA_raw - 1)/3)*100) %>% 
+  mutate(NV_raw = sum(across(c(a14,a15))/2)) %>% 
+  mutate(NV = (NV_raw - 1)/3*100) %>% 
+  mutate(NV_rev =(1-(NV_raw - 1)/3)*100) %>% 
+  mutate(PA_raw = sum(across(c(a9,a19))/2)) %>% 
+  mutate(PA = (PA_raw - 1)/3*100) %>% 
+  mutate(PA_rev = (1 - (PA_raw - 1)/3)*100) %>%
+  mutate(DY = (a8-1)/3*100) %>% 
+  mutate(DY_rev = (1 - (a8-1)/3)*100) %>% 
+  mutate(SL = (a11-1)/3*100) %>%
+  mutate(SL_rev = (1 - (a11-1)/3)*100) %>%
+  mutate(AP = (a13-1)/3*100) %>%
+  mutate(AP_rev = (1 - (a13-1)/3)*100) %>%
+  mutate(CO = (a16-1)/3*100) %>%
+  mutate(CO_rev = (1-(a16-1)/3)*100) %>%
+  mutate(DI = (a17-1)/3*100) %>%
+  mutate(DI_rev = (1 - (a17-1)/3)*100) %>%
+  mutate(FI = (a28-1)/3*100) %>% 
+  mutate(summary_score = sum(across(c(PF2, RF2, EF, CF, SF,
+                                    FA_rev, NV_rev, PA_rev, DY_rev, SL_rev, AP_rev, CO_rev, DI_rev)))/13) %>%
+  select(record_id,.imp,time,summary_score)
+
+p2_bo_long3 <- full_join(p2_bo_long2,p2_bo_long_qlq2,by=c("record_id","time",".imp"))
+
+saveRDS(p2_bo_long3,here("Data","p2bo_imp_long.RDS"))
+p2_bo_imp <- split(x=p2_bo_long3,f=p2_bo_long3$.imp)
+saveRDS(p2_bo_imp,here("Data","p2bo_imp_split.RDS"))
+
+```
+
